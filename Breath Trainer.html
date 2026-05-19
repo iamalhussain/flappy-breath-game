@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Breath Trainer · Sustain Coach</title>
+<title>Humming Bird</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+Arabic:wght@500;600;700;800&display=swap" rel="stylesheet" />
@@ -324,7 +324,95 @@
     pointer-events: none; font-weight: 500;
     text-shadow: 0 1px 3px rgba(0, 0, 0, .5);
   }
+  /* Persistent "Say [letter]" panel on the left edge of the game */
+  .say-indicator {
+    position: absolute; left: 22px; top: 50%; transform: translateY(-50%);
+    z-index: 5; pointer-events: none;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    background: var(--panel);
+    border-radius: 22px;
+    padding: 14px 18px 18px;
+    box-shadow: var(--pop);
+  }
+  .say-indicator__label {
+    font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+    color: rgba(20, 24, 31, .55);
+  }
+  .say-indicator__glyph {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 56px; height: 56px; padding: 0 12px; border-radius: 16px;
+    background: linear-gradient(135deg, #fe2c55, #ff8e3d);
+    color: #fff;
+    font-weight: 800; font-size: 38px;
+    text-transform: uppercase; line-height: 1;
+    box-shadow: 0 8px 18px rgba(254, 44, 85, .4);
+  }
+
+  /* Screen-record button: rounded white pill with a red dot or square,
+     bottom-right of the viewport. */
+  .record-btn {
+    position: absolute; right: 22px; bottom: 22px; z-index: 6;
+    appearance: none; border: 0;
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 14px; border-radius: 999px;
+    background: var(--panel); color: var(--ink);
+    font: inherit; font-weight: 700; font-size: 13px;
+    box-shadow: var(--pop);
+    cursor: pointer;
+    transition: transform .12s ease, box-shadow .12s ease;
+  }
+  .record-btn:hover { transform: translateY(-1px); box-shadow: var(--pop-strong); }
+  .record-btn.is-on { background: var(--accent-2); color: #fff; box-shadow: 0 10px 24px rgba(254, 44, 85, .45); }
+  .record-btn__dot {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--accent-2);
+    box-shadow: 0 0 8px rgba(254, 44, 85, .6);
+  }
+  .record-btn__square {
+    width: 10px; height: 10px; border-radius: 2px;
+    background: #fff;
+    animation: recPulse 1.4s ease-in-out infinite;
+  }
+  @keyframes recPulse {
+    0%, 100% { opacity: .6; }
+    50%      { opacity: 1; }
+  }
+
   .footnote b { color: var(--accent-3); font-weight: 800; }
+
+  /* Screen-record button: rounded pill in the bottom-right of the screen.
+     Idle: white pill with a red dot. Recording: hot-pink pill with a
+     pulsing white square. */
+  .record-btn {
+    position: absolute; right: 22px; bottom: 22px; z-index: 6;
+    appearance: none; border: 0;
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 14px; border-radius: 999px;
+    background: var(--panel); color: var(--ink);
+    font: inherit; font-weight: 700; font-size: 13px;
+    box-shadow: var(--pop);
+    cursor: pointer;
+    transition: transform .12s ease, box-shadow .12s ease;
+  }
+  .record-btn:hover { transform: translateY(-1px); box-shadow: var(--pop-strong); }
+  .record-btn.is-on {
+    background: var(--accent-2); color: #fff;
+    box-shadow: 0 10px 24px rgba(254, 44, 85, .45);
+  }
+  .record-btn__dot {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--accent-2);
+    box-shadow: 0 0 8px rgba(254, 44, 85, .6);
+  }
+  .record-btn__square {
+    width: 10px; height: 10px; border-radius: 2px;
+    background: #fff;
+    animation: recPulse 1.4s ease-in-out infinite;
+  }
+  @keyframes recPulse {
+    0%, 100% { opacity: .55; }
+    50%      { opacity: 1; }
+  }
 
   /* Right-side gamified score panel — coin + bouncing number that pops on each tick */
   .big-score {
@@ -437,7 +525,7 @@
 <script>
   // Persisted tweak defaults — direct-editable via the toolbar Tweaks toggle.
   window.TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
-    "letter": "f",
+    "letter": "n",
     "language": "en",
     "character": "yellow",
     "targetStrength": 10,

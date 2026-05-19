@@ -100,7 +100,10 @@ function letterStrength(freqData, sampleRate, fftSize, letter) {
   // never affects the other.
   const mGate         = clamp(1 - Math.max(0, fLM - 0.14) * 6, 0, 1);
   const mVoicedGate   = clamp((fV - 0.02) * 8.0, 0, 1);
-  const mNasalShape   = clamp(((fV + fL) - 0.45) * 4.0, 0, 1);
+  // Even stricter shape gate for m: room hum and quiet breath occasionally
+  // cleared the previous 0.45 threshold. 0.55 means the V+L bands need to
+  // dominate over half the total spectrum — only an actual "mmm" hits that.
+  const mNasalShape   = clamp(((fV + fL) - 0.55) * 4.0, 0, 1);
   // n's F2 sits anywhere from 1.5–2 kHz; broaden the floor and soften the
   // slope further so a quieter "nnn" doesn't get gated to 0.
   const nGate         = clamp((fLM - 0.06) * 4.0, 0, 1);
@@ -159,14 +162,14 @@ function PermissionCard({ onStart, error, requesting, letter, language }) {
   const glyph = glyphFor(letter, language);
   const isAr = language === 'ar';
   const T = isAr ? {
-    title: 'فلابي بيرد · بالنفس',
+    title: 'الطائر الطنّان',
     body1: 'استمر بإصدار حرف ',
     body2: ' لإبقاء الطائر طائرًا. توقّف فيسقط.',
     cta: 'السماح بالكاميرا والمايك',
     requesting: 'جاري طلب الكاميرا والمايك…',
     privacy: 'الفيديو والصوت يبقيان على جهازك — لا يتم رفع شيء.',
   } : {
-    title: 'Flappy Bird · Breath Control',
+    title: 'Humming Bird',
     body1: 'Sustain a steady ',
     body2: ' to keep the bird in the air. Stop, and it falls.',
     cta: 'Allow camera & mic',
@@ -600,6 +603,71 @@ function App() {
     setCalStrength(0);
     setShowFallHint(performance.now());
   };
+  // ── screen-record support ─────────────────────────────────────────────
+  // Uses getDisplayMedia + MediaRecorder so the saved file includes the
+  // webcam, game canvas and HUD exactly as the user sees them. Browser
+  // shows its own "select what to share" picker; user chooses tab/window.
+  const [isRecording, setIsRecording] = useState(false);
+  const recorderRef = useRef(null);
+  const recChunksRef = useRef([]);
+  const recStreamRef = useRef(null);
+
+  const toggleRecording = useCallback(async () => {
+    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+      recorderRef.current.stop();
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: 30 },
+        audio: true,
+      });
+      recStreamRef.current = stream;
+      const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
+        ? 'video/webm;codecs=vp9,opus'
+        : 'video/webm';
+      const mr = new MediaRecorder(stream, { mimeType: mime });
+      recChunksRef.current = [];
+      mr.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) recChunksRef.current.push(e.data);
+      };
+      mr.onstop = () => {
+        const blob = new Blob(recChunksRef.current, { type: 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `humming-bird-${Date.now()}.webm`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        stream.getTracks().forEach((tr) => tr.stop());
+        recStreamRef.current = null;
+        setIsRecording(false);
+      };
+      // If the user clicks the browser's "Stop sharing" button, the video
+      // track ends — mirror that into our state so the recorder stops.
+      stream.getVideoTracks()[0].addEventListener('ended', () => {
+        if (mr.state !== 'inactive') mr.stop();
+      });
+      recorderRef.current = mr;
+      mr.start();
+      setIsRecording(true);
+    } catch (e) {
+      // User dismissed the picker or denied permission — no-op.
+      setIsRecording(false);
+    }
+  }, []);
+  // Stop any in-flight recording when the tab tears down.
+  useEffect(() => () => {
+    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+      try { recorderRef.current.stop(); } catch (_) { /* ignore */ }
+    }
+    if (recStreamRef.current) {
+      recStreamRef.current.getTracks().forEach((tr) => tr.stop());
+    }
+  }, []);
+
   const resetScore = () => {
     const g = gameRef.current;
     g.score = 0; g.hits = 0; g.streak = 0; g.bestStreak = 0; g.cols = [];
@@ -607,6 +675,15 @@ function App() {
     g.spawnTimer = 0;
     g.birdVy = 0;
     g.initialized = false; // re-center bird on next frame
+    // Pick a NEW random letter — distinct from the current one — so each
+    // "Play again" run challenges a different sound.
+    const choices = ['s', 'z', 'sh', 'f', 'v', 'm', 'n'];
+    const current = tRef.current.letter;
+    let pick = current;
+    while (pick === current) {
+      pick = choices[Math.floor(Math.random() * choices.length)];
+    }
+    setTweak('letter', pick);
     setStats({ score: 0, hits: 0, streak: 0, bestStreak: 0, gameOver: false });
   };
 
@@ -629,37 +706,17 @@ function App() {
         <div></div>
         {phase === 'playing' && !runway.active && (
           <div className="stat-rail">
-            <div className="stat">
-              <div className="lbl">Cleared</div>
-              <div className="val good">{stats.score}</div>
-            </div>
-            <div className="stat">
-              <div className="lbl">Hits</div>
-              <div className={`val ${stats.hits > 0 ? 'warn' : ''}`}>{stats.hits}</div>
-            </div>
-            <div className="stat">
-              <div className="lbl">Streak</div>
-              <div className="val">{stats.streak}<span style={{
-                color: 'var(--muted)', fontSize: 11, marginLeft: 4,
-              }}>/ {stats.bestStreak}</span></div>
+            <div className="stat stat--streak">
+              <div className="lbl">{t.language === 'ar' ? 'أفضل نتيجة' : 'Best Score'}</div>
+              <div className="val">{stats.bestStreak}</div>
             </div>
           </div>
         )}
       </div>
 
-      {/* Side meter */}
-      {phase === 'playing' && t.showMeter && (
-        <div className="meter">
-          <div className="cap">Strong</div>
-          <div className="col">
-            <div className="band" style={{
-              top: `${sideMeterTargetPct - 4}%`, height: '8%',
-            }} />
-            <div className="fill" style={{ height: `${sideMeterFillPct}%` }} />
-          </div>
-          <div className="cap">Quiet</div>
-        </div>
-      )}
+      {/* Side meter and bottom game-info pills removed by request —
+          the on-canvas big-score panel + game-over card cover all
+          essential feedback. */}
 
       {/* Center cards */}
       {phase === 'intro' && (
@@ -691,6 +748,20 @@ function App() {
         </div>
       )}
       {/* Game-over card */}
+      {/* Screen-record button: starts/stops a screen capture via the
+          browser's getDisplayMedia API and downloads a .webm when stopped. */}
+      {phase === 'playing' && (
+        <button className={'record-btn' + (isRecording ? ' is-on' : '')}
+                onClick={toggleRecording}
+                title={isRecording ? 'Stop & save' : 'Record'}>
+          {isRecording ? <span className="record-btn__square" /> : <span className="record-btn__dot" />}
+          <span className="record-btn__lbl">
+            {isRecording
+              ? (t.language === 'ar' ? 'إيقاف وحفظ' : 'Stop & save')
+              : (t.language === 'ar' ? 'تسجيل' : 'Record')}
+          </span>
+        </button>
+      )}
       {phase === 'playing' && stats.gameOver && (
         <div className="gameover-card">
           <div className="gameover-card__label">
@@ -721,34 +792,8 @@ function App() {
 
       {phase === 'playing' && (
         <>
-          <div className="game-info">
-            <div className="pill">
-              <span>Letter</span>
-              <span className={'letter-chip' + (t.language === 'ar' ? ' ar' : '')}>
-                <span className={t.language === 'ar' ? 'ar-glyph' : ''}>
-                  {glyphFor(t.letter, t.language)}
-                </span>
-              </span>
-              <span style={{ color: 'var(--dim)' }}>·</span>
-              <span>match</span>
-              <div className="strength-bar">
-                <i style={{ width: `${Math.min(100, meterPct)}%` }} />
-                <em style={{ left: `${targetMarker}%` }} />
-              </div>
-            </div>
-            <div className="pill">
-              <span>Target</span>
-              <b>{Math.round(t.targetStrength)}</b>
-              <span style={{ color: 'var(--dim)' }}>·</span>
-              <span>now</span>
-              <b>{Math.round(hudStrength * 100)}</b>
-            </div>
-          </div>
           <div className="game-shell">
             <canvas ref={canvasRef}></canvas>
-          </div>
-          <div className="footnote">
-            Hold a steady "<b style={{ color: 'var(--accent)' }}>{t.letter}</b>" — the bird falls when you stop.
           </div>
         </>
       )}
@@ -926,34 +971,23 @@ function drawPipe(ctx, c, w, playH, pipeW) {
   const x = Math.round(c.x - pipeW / 2);
   const gapTop = Math.round(c.gapY - c.gapH / 2);
   const gapBot = Math.round(c.gapY + c.gapH / 2);
-  // Top pipe (extends from 0 down to gapTop)
   if (gapTop > 0) drawPipeBody(ctx, x, 0, pipeW, gapTop, 'down', c.hit);
-  // Bottom pipe (extends from gapBot to playH)
   if (gapBot < playH) drawPipeBody(ctx, x, gapBot, pipeW, playH - gapBot, 'up', c.hit);
 }
 
 function drawPipeBody(ctx, x, y, w, h, capSide, hit) {
   if (h <= 0) return;
-  // Body: vertical stripes (light highlight, body, body, body, shadow, outline)
   const cols = makePipeColumns(w, hit);
-  // Determine cap height & body extent
   const capH = 5;
   const bodyTop = capSide === 'up' ? y + capH : y;
   const bodyBot = capSide === 'down' ? y + h - capH : y + h;
-  // Draw body
   for (let i = 0; i < cols.length; i++) {
     ctx.fillStyle = cols[i];
     ctx.fillRect(x + i, bodyTop, 1, Math.max(0, bodyBot - bodyTop));
   }
-  // Outline body top/bottom edges
   ctx.fillStyle = hit ? '#8a2020' : PIPE_DARK;
-  if (capSide === 'up') {
-    // Top of body sits against the cap (no edge needed)
-    ctx.fillRect(x, bodyBot - 1, w, 1);
-  } else {
-    ctx.fillRect(x, bodyTop, w, 1);
-  }
-  // Draw cap (wider by 1 px each side)
+  if (capSide === 'up') ctx.fillRect(x, bodyBot - 1, w, 1);
+  else ctx.fillRect(x, bodyTop, w, 1);
   const capX = x - 1;
   const capW = w + 2;
   const capY = capSide === 'up' ? y : y + h - capH;
@@ -962,30 +996,21 @@ function drawPipeBody(ctx, x, y, w, h, capSide, hit) {
     ctx.fillStyle = capCols[i];
     ctx.fillRect(capX + i, capY + 1, 1, capH - 2);
   }
-  // Cap top & bottom outline
   ctx.fillStyle = hit ? '#8a2020' : PIPE_DARK;
   ctx.fillRect(capX, capY, capW, 1);
   ctx.fillRect(capX, capY + capH - 1, capW, 1);
 }
 
 function makePipeColumns(w, hit) {
-  // Build a per-column color array for the pipe body.
-  // Left:  [outline, highlight, highlight, body, body, body, ..., shadow, shadow, outline]
   const D = hit ? '#8a2020' : PIPE_DARK;
   const L = hit ? '#ff9a8a' : PIPE_LIGHT;
   const B = hit ? '#d75050' : PIPE_BODY;
   const S = hit ? '#7a1f1f' : PIPE_SHADOW;
   const out = new Array(w);
-  out[0] = D;
-  out[1] = L;
-  out[2] = L;
+  out[0] = D; out[1] = L; out[2] = L;
   for (let i = 3; i < w - 3; i++) out[i] = B;
-  if (w >= 6) {
-    out[w - 3] = S;
-    out[w - 2] = S;
-  }
+  if (w >= 6) { out[w - 3] = S; out[w - 2] = S; }
   out[w - 1] = D;
-  // For very narrow pipes (rare), fall back to mostly body
   for (let i = 0; i < w; i++) if (!out[i]) out[i] = B;
   return out;
 }
