@@ -80,11 +80,11 @@ function letterStrength(freqData, sampleRate, fftSize, letter) {
     v:  { V: 0.28, L: 0.12, LM: 0.10, M: 0.22, H: 0.20, VH: 0.08 },
     // m vs n: both nasals, both voiced — the key separator is F2.
     // m has lips closed, longer oral cavity → F2 ~1.1kHz (LM low).
-    // n has tongue on alveolar ridge → F2 ~1.7-2kHz (LM high, M present).
-    // We make the templates extreme on LM so the L1 distance forces a
-    // hard choice between the two letters.
+    // n has tongue on alveolar ridge → F2 ~1.7-2kHz (LM elevated).
+    // n's LM template is moderated from 0.35 to a more realistic 0.25 so
+    // the L1 distance for a typical "nnnn" doesn't blow up at this band.
     m:  { V: 0.45, L: 0.42, LM: 0.08, M: 0.03, H: 0.01, VH: 0.01 },
-    n:  { V: 0.28, L: 0.22, LM: 0.35, M: 0.12, H: 0.02, VH: 0.01 },
+    n:  { V: 0.30, L: 0.25, LM: 0.25, M: 0.15, H: 0.04, VH: 0.01 },
   };
   const t = T[letter];
   if (!t) return total;
@@ -95,13 +95,20 @@ function letterStrength(freqData, sampleRate, fftSize, letter) {
   // in voicing; m/n differ only in F2). Multiplicative gates on the
   // discriminating band drop a wrong-letter score to ~0.
   const voicelessGate = clamp(1 - fV * 3.2, 0, 1);          // s, sh, f
-  const voicedGate    = clamp((fV - 0.04) * 7.0, 0, 1);     // z, v
+  const voicedGate    = clamp((fV - 0.02) * 8.0, 0, 1);     // z, v
+  // m and n each get their own gates / shape filters so tuning one nasal
+  // never affects the other.
   const mGate         = clamp(1 - Math.max(0, fLM - 0.14) * 6, 0, 1);
-  const nGate         = clamp((fLM - 0.14) * 6.0, 0, 1);
-  // Coarse shape: separates nasals from fricatives. Lowered threshold so v
-  // (voiced fricative — less turbulence than f) still passes.
-  const fricShape     = clamp(((fM + fH + fVH) - 0.25) * 4.0, 0, 1);
-  const nasalShape    = clamp(((fV + fL) - 0.30) * 4.0, 0, 1);
+  const mVoicedGate   = clamp((fV - 0.02) * 8.0, 0, 1);
+  const mNasalShape   = clamp(((fV + fL) - 0.45) * 4.0, 0, 1);
+  // n's F2 sits anywhere from 1.5–2 kHz; broaden the floor and soften the
+  // slope further so a quieter "nnn" doesn't get gated to 0.
+  const nGate         = clamp((fLM - 0.06) * 4.0, 0, 1);
+  const nVoicedGate   = clamp((fV - 0.02) * 8.0, 0, 1);
+  const nNasalShape   = clamp(((fV + fL) - 0.25) * 4.0, 0, 1);
+  // Coarse shape: separates nasals from fricatives. Loose threshold so v
+  // (the quietest voiced fricative) still passes.
+  const fricShape     = clamp(((fM + fH + fVH) - 0.15) * 4.0, 0, 1);
 
   const dist = Math.abs(fV - t.V) + Math.abs(fL - t.L) + Math.abs(fLM - t.LM)
              + Math.abs(fM - t.M) + Math.abs(fH - t.H) + Math.abs(fVH - t.VH);
@@ -114,7 +121,7 @@ function letterStrength(freqData, sampleRate, fftSize, letter) {
   // strengths instead of one being twice the other.
   const totalE = H + VH * 1.2 + M * 0.9 + L * 0.7 + V * 0.7 + LM * 0.6;
   const scaleByLetter = {
-    s: 2.4, z: 4.0, sh: 2.6, f: 4.7, v: 5.5, m: 3.2, n: 3.6,
+    s: 2.4, z: 1.5, sh: 2.6, f: 4.9, v: 5.5, m: 1.7, n: 6.0,
   };
   const gateByLetter = {
     s:  voicelessGate * fricShape,
@@ -124,8 +131,8 @@ function letterStrength(freqData, sampleRate, fftSize, letter) {
     v:  voicedGate    * fricShape,
     // Nasals additionally require voicing — without it, low-amplitude
     // background noise was passing the m gate and flying the bird up.
-    m:  mGate         * nasalShape * voicedGate,
-    n:  nGate         * nasalShape * voicedGate,
+    m:  mGate         * mNasalShape * mVoicedGate,
+    n:  nGate         * nNasalShape * nVoicedGate,
   };
   return clamp(
     matchSq * totalE * scaleByLetter[letter] * gateByLetter[letter],
@@ -233,7 +240,7 @@ function App() {
   const [calStrength, setCalStrength] = useState(0);
   // Inline-runway calibration state. Mirrors gameRef.calibrating / calRemaining
   // so the banner UI can render. Updated in the throttled HUD publish below.
-  const [runway, setRunway] = useState({ active: false, remaining: 0 });
+  const [runway, setRunway] = useState({ active: true, remaining: 0.2 });
   // Tracks the transition from runway → game so we can flash the
   // "Don't let your bird fall" hint right after the first pipe arrives.
   // Holds the timestamp when runway ended; null otherwise.
@@ -325,8 +332,8 @@ function App() {
       // Skip the standalone calibration phase — calibration now runs inside
       // the game itself for the first few seconds ("runway").
       const g = gameRef.current;
-      g.calibrating = false;
-      g.calRemaining = 0;
+      g.calibrating = true;
+      g.calRemaining = 0.2;
       g.calSamples = [];
       setPhase('playing');
     } catch (e) {
@@ -565,7 +572,7 @@ function App() {
   const recalibrate = () => {
     const g = gameRef.current;
     g.calibrating = true;
-    g.calRemaining = 1.0;
+    g.calRemaining = 0.2;
     g.calSamples = [];
     g.cols = [];
     g.spawnTimer = 0;
