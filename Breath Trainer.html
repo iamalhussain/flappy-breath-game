@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Breath Trainer · Sustain Coach</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Noto+Sans+Arabic:wght@500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --bg: #07090b;
+    --panel: rgba(255, 255, 255, .94);
+    --panel-soft: rgba(255, 255, 255, .82);
+    --fg: #ecf1f3;
+    --ink: #14181f;
+    --muted: #8a96a0;
+    --dim: #4d5760;
+    /* TikTok-ish neon accents */
+    --accent: #25f4ee;          /* cyan */
+    --accent-2: #fe2c55;        /* hot pink */
+    --accent-3: #ffe43e;        /* punchy yellow */
+    --warn: #ff8a6b;
+    --good: #25f4ee;
+    --line: rgba(255, 255, 255, .12);
+    --line-strong: rgba(255, 255, 255, .22);
+    --pop: 0 10px 30px rgba(0, 0, 0, .35), 0 2px 6px rgba(0, 0, 0, .25);
+    --pop-strong: 0 18px 48px rgba(0, 0, 0, .45), 0 4px 10px rgba(0, 0, 0, .3);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased; overflow: hidden;
+  }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; }
+  /* When the document language is set to Arabic the entire UI flips
+     direction; Arabic glyphs also need a proper font fallback. */
+  html[lang="ar"] body { font-family: 'Noto Sans Arabic', 'Inter', sans-serif; }
+  .ar-glyph { font-family: 'Noto Sans Arabic', sans-serif; font-feature-settings: normal; }
+
+  .stage { position: fixed; inset: 0; overflow: hidden; }
+
+  /* Webcam — almost no darkening, just a soft top/bottom fade like a TikTok feed */
+  .vid-wrap { position: absolute; inset: 0; background: #050608; }
+  .vid-wrap video {
+    width: 100%; height: 100%; object-fit: cover;
+    transform: scaleX(-1);
+    filter: saturate(1.05) contrast(1.02);
+  }
+  .vid-wrap.idle::before {
+    content: ''; position: absolute; inset: 0;
+    background:
+      radial-gradient(900px 600px at 30% 40%, rgba(37, 244, 238, .07), transparent 60%),
+      radial-gradient(800px 500px at 70% 60%, rgba(254, 44, 85, .05), transparent 60%);
+  }
+  .vignette {
+    position: absolute; inset: 0; pointer-events: none;
+    background:
+      linear-gradient(180deg, rgba(0, 0, 0, .35) 0%, transparent 18%, transparent 60%, rgba(7, 9, 11, .55) 100%);
+  }
+
+  /* Top HUD bar */
+  .hud-top {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 5;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 18px; gap: 16px;
+    pointer-events: none;
+  }
+  .brand { display: none; }
+
+  /* Score "stickers" — bright white chips with a colored accent halo */
+  .stat-rail { display: flex; align-items: stretch; gap: 10px; pointer-events: auto; }
+  .stat {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    padding: 10px 16px; border-radius: 22px;
+    background: var(--panel);
+    color: var(--ink);
+    box-shadow: var(--pop);
+    min-width: 86px;
+    position: relative;
+  }
+  .stat::before {
+    content: ''; position: absolute; inset: -3px; border-radius: 25px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    z-index: -1; opacity: .9; filter: blur(8px);
+  }
+  .stat .lbl {
+    font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+    color: rgba(20, 24, 31, .55); margin-bottom: 2px; font-weight: 600;
+  }
+  .stat .val {
+    font-weight: 800; font-size: 22px; line-height: 1;
+    font-variant-numeric: tabular-nums; letter-spacing: -.02em;
+    color: var(--ink);
+  }
+  .stat .val.good { color: #0aa898; }
+  .stat .val.warn { color: var(--accent-2); }
+  /* The streak chip wears the hot-pink halo; cleared chip stays cyan/yellow */
+  .stat--cleared::before { background: linear-gradient(135deg, #25f4ee, #ffe43e); }
+  .stat--streak::before  { background: linear-gradient(135deg, #fe2c55, #ffe43e); }
+  .stat--hits::before    { background: linear-gradient(135deg, #fe2c55, #25f4ee); }
+
+  /* Vertical strength meter — slim white capsule floating on the right edge */
+  .meter {
+    position: absolute; right: 18px; top: 50%; transform: translateY(-58%);
+    width: 44px; z-index: 5;
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    pointer-events: none;
+  }
+  .meter .col {
+    position: relative; width: 14px; height: 240px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .85);
+    box-shadow: var(--pop), inset 0 0 0 2px rgba(0, 0, 0, .04);
+    overflow: hidden;
+  }
+  .meter .fill {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(to top, #fe2c55, #ffe43e 50%, #25f4ee);
+    border-radius: 999px;
+    transition: height .04s linear;
+  }
+  .meter .band {
+    position: absolute; left: -3px; right: -3px;
+    background: rgba(255, 255, 255, .6);
+    border-top: 2px solid var(--ink);
+    border-bottom: 2px solid var(--ink);
+    mix-blend-mode: difference;
+  }
+  .meter .cap {
+    font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+    color: rgba(255, 255, 255, .85); font-weight: 700;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, .6);
+  }
+
+  /* Center "permission" card — bright white sticker */
+  .center-card {
+    position: absolute; left: 50%; top: 38%; transform: translate(-50%, -50%);
+    z-index: 6; width: min(420px, 86vw);
+    background: var(--panel); color: var(--ink);
+    border-radius: 28px;
+    padding: 26px 28px 22px;
+    box-shadow: var(--pop-strong);
+    text-align: center;
+  }
+  .center-card h1 {
+    margin: 0 0 8px; font-size: 22px; font-weight: 800; letter-spacing: -.02em;
+    color: var(--ink);
+  }
+  .center-card p {
+    margin: 0 0 18px; color: rgba(20, 24, 31, .65); font-size: 14px; line-height: 1.5;
+  }
+  .center-card .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .btn {
+    appearance: none; border: 0; padding: 12px 22px;
+    font: inherit; font-weight: 700; font-size: 14px;
+    border-radius: 999px; cursor: pointer;
+    white-space: nowrap;
+    transition: transform .12s ease, box-shadow .12s ease;
+  }
+  .btn.primary {
+    background: linear-gradient(135deg, #fe2c55, #ff5d7c);
+    color: #fff;
+    box-shadow: 0 10px 24px rgba(254, 44, 85, .45);
+  }
+  .btn.primary:hover { transform: translateY(-1px); box-shadow: 0 14px 28px rgba(254, 44, 85, .55); }
+  .btn.primary:disabled { opacity: .6; cursor: progress; }
+  .btn.ghost {
+    background: rgba(0, 0, 0, .05); color: var(--ink);
+  }
+  .btn.ghost:hover { background: rgba(0, 0, 0, .1); }
+
+  .hint-row {
+    display: inline-flex; align-items: center; gap: 8px;
+    margin-bottom: 14px; padding: 5px 12px;
+    background: rgba(37, 244, 238, .15);
+    border-radius: 999px;
+    color: #0aa898; font-size: 11px; letter-spacing: .04em; font-weight: 600;
+  }
+  .hint-row .dot {
+    width: 6px; height: 6px; border-radius: 50%; background: #0aa898;
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: .6; transform: scale(1); }
+    50% { opacity: 1; transform: scale(1.4); }
+  }
+
+  /* Bottom: pixel-art game strip */
+  .game-shell {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 4;
+    height: 340px;
+    box-shadow: 0 -1px 0 rgba(0, 0, 0, .6), 0 -20px 60px rgba(0, 0, 0, .35);
+  }
+  .game-shell::before {
+    content: ''; position: absolute; left: 0; right: 0; top: -80px; height: 80px;
+    background: linear-gradient(to top, rgba(7, 9, 11, .85) 0%, rgba(7, 9, 11, .3) 60%, transparent 100%);
+    pointer-events: none;
+  }
+  .game-shell::after {
+    content: ''; position: absolute; left: 0; right: 0; top: 0; height: 2px;
+    background: linear-gradient(to right, transparent, rgba(255, 255, 255, .25) 50%, transparent);
+    pointer-events: none;
+  }
+  .game-shell canvas {
+    display: block; width: 100%; height: 100%;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+
+  /* Game info strip — chunky white pills */
+  .game-info {
+    position: absolute; left: 18px; right: 18px; bottom: 352px; z-index: 5;
+    display: flex; align-items: center; justify-content: space-between;
+    pointer-events: none;
+  }
+  .game-info .pill {
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 8px 14px; border-radius: 999px;
+    background: var(--panel);
+    color: var(--ink);
+    font-size: 12px; font-weight: 600;
+    box-shadow: var(--pop);
+    pointer-events: auto;
+  }
+  .game-info .pill b {
+    color: var(--ink); font-weight: 800;
+    font-variant-numeric: tabular-nums;
+  }
+  .game-info .pill > span:not(.letter-chip):not(.strength-bar) {
+    color: rgba(20, 24, 31, .55); font-weight: 600; font-size: 11px;
+    letter-spacing: .06em; text-transform: uppercase;
+  }
+
+  /* Letter glyph chip used in pills + permission card */
+  .letter-chip {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 26px; height: 26px; padding: 0 8px; border-radius: 10px;
+    background: linear-gradient(135deg, #fe2c55, #ff8e3d);
+    color: #fff;
+    font-weight: 800; font-size: 14px;
+    text-transform: uppercase; letter-spacing: 0;
+    box-shadow: 0 4px 10px rgba(254, 44, 85, .4);
+  }
+  .letter-chip.ar { min-width: 30px; height: 30px; font-size: 18px; padding: 0 10px; }
+
+  .strength-bar {
+    width: 90px; height: 8px; border-radius: 999px; position: relative;
+    background: rgba(0, 0, 0, .08); overflow: visible;
+  }
+  .strength-bar i {
+    position: absolute; left: 0; top: 0; bottom: 0;
+    background: linear-gradient(to right, #fe2c55, #ffe43e 60%, #25f4ee);
+    transition: width .05s linear; border-radius: 999px;
+  }
+  .strength-bar em {
+    position: absolute; top: -4px; bottom: -4px; width: 3px;
+    background: var(--ink); border-radius: 2px;
+  }
+
+  /* Calibration runway "STICKER" — big punchy centered overlay */
+  .runway-banner {
+    position: absolute; left: 50%; top: 36%; transform: translate(-50%, -50%);
+    z-index: 6; pointer-events: none;
+    animation: runwayIn .35s cubic-bezier(.34, 1.56, .64, 1);
+  }
+  .runway-banner--exit { animation: runwayFade 2.2s ease-out forwards; }
+  @keyframes runwayIn {
+    from { opacity: 0; transform: translate(-50%, -50%) scale(.7); }
+    to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  }
+  @keyframes runwayFade {
+    0%   { opacity: 0; transform: translate(-50%, -50%) scale(.9); }
+    15%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    75%  { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    100% { opacity: 0; transform: translate(-50%, calc(-50% - 12px)) scale(1.05); }
+  }
+  .runway-banner__say {
+    font-size: clamp(48px, 9vw, 96px);
+    font-weight: 800; letter-spacing: -.04em;
+    color: #fff;
+    text-align: center; line-height: .95;
+    text-shadow:
+      -3px 0 0 #000, 3px 0 0 #000, 0 -3px 0 #000, 0 3px 0 #000,
+      -3px -3px 0 #000, 3px -3px 0 #000, -3px 3px 0 #000, 3px 3px 0 #000,
+      0 10px 24px rgba(0, 0, 0, .55);
+    display: inline-block; padding: 0 6px;
+  }
+  .runway-banner__say b {
+    color: var(--accent-3);
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: -.02em;
+  }
+  .runway-banner__say b.ar { color: var(--accent-3); }
+  .runway-banner__say--soft {
+    font-size: clamp(28px, 5vw, 48px);
+    font-weight: 800;
+    color: #fff;
+  }
+
+  /* Calibration overlay (legacy modal — kept for any future use; currently
+     the inline runway replaces it). */
+  .calibrating { display: none; }
+
+  /* Error */
+  .error {
+    color: var(--accent-2); font-size: 12px; margin-top: 10px; font-weight: 600;
+  }
+
+  /* Privacy badge */
+  .priv {
+    display: inline-flex; align-items: center; gap: 6px;
+    color: rgba(20, 24, 31, .45); font-size: 11px; margin-top: 14px;
+    font-weight: 500;
+  }
+  .priv svg { width: 12px; height: 12px; }
+
+  /* Footnote bottom-left */
+  .footnote {
+    position: absolute; bottom: 14px; left: 18px; z-index: 6;
+    font-size: 11px; color: rgba(255, 255, 255, .7); letter-spacing: .02em;
+    pointer-events: none; font-weight: 500;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, .5);
+  }
+  .footnote b { color: var(--accent-3); font-weight: 800; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+
+<script>
+  // Persisted tweak defaults — direct-editable via the toolbar Tweaks toggle.
+  window.TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+    "letter": "n",
+    "language": "en",
+    "character": "yellow",
+    "targetStrength": 2,
+    "sensitivity": 0.5,
+    "smoothing": 55,
+    "gravity": 300,
+    "gapSize": 49,
+    "columnWidth": 16,
+    "columnSpacing": 350,
+    "scrollSpeed": 95,
+    "showWebcam": true,
+    "showMeter": true
+  }/*EDITMODE-END*/;
+</script>
+
+<script type="text/babel" src="app.jsx"></script>
+</body>
+</html>

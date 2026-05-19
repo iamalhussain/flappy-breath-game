@@ -1,0 +1,47 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.Spotlight-V100
+.Trashes
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Node (in case you add tooling later)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.pnpm-debug.log*
+
+# Environment / secrets — never commit these
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Build / cache
+dist/
+build/
+.cache/
+
+# Logs
+logs/
+*.log
+
+# Local scratch
+scratch/
+tmp/
+*.tmp
+
+# Old zips / archives (the actual files live in the repo)
+*.zip
