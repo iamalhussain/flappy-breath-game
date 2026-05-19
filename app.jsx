@@ -231,10 +231,19 @@ function CalibrationOverlay({ progress, currentStrength, letter }) {
 // ── main app ────────────────────────────────────────────────────────────────
 function App() {
   const [t, setTweak] = useTweaks(window.TWEAK_DEFAULTS);
+  // Pick a random letter once on mount so each session starts with a
+  // different prompt. Runs in an effect (not at render) so the tweak
+  // store and host-postMessage pipeline are ready.
+  useEffect(() => {
+    const choices = ['s', 'z', 'sh', 'f', 'v', 'm', 'n'];
+    const pick = choices[Math.floor(Math.random() * choices.length)];
+    setTweak('letter', pick);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const [phase, setPhase] = useState('intro');
   const [requesting, setRequesting] = useState(false);
   const [error, setError] = useState(null);
-  const [stats, setStats] = useState({ score: 0, hits: 0, streak: 0, bestStreak: 0 });
+  const [stats, setStats] = useState({ score: 0, hits: 0, streak: 0, bestStreak: 0, gameOver: false });
   const [hudStrength, setHudStrength] = useState(0);
   const [calProgress, setCalProgress] = useState(0);
   const [calStrength, setCalStrength] = useState(0);
@@ -281,6 +290,7 @@ function App() {
     hits: 0,
     streak: 0,
     bestStreak: 0,
+    gameOver: false,
     initialized: false,
     // Inline calibration runway: when active, no pipes spawn and we keep
     // sampling the user's letterStrength. Calibration ends when calRemaining
@@ -482,7 +492,9 @@ function App() {
       // ── pipes ─────────────────────────────────────────────────────────
       const spacingPx = tw.columnSpacing / PIXEL;
       const spawnInterval = spacingPx / speedOffPx;
-      if (!g.calibrating) {
+      // Skip spawning during the calibration runway AND once the game is
+      // over so the world freezes mid-crash.
+      if (!g.calibrating && !g.gameOver) {
         g.spawnTimer += dt;
         if (g.spawnTimer >= spawnInterval || g.cols.length === 0) {
           g.spawnTimer = 0;
@@ -501,33 +513,37 @@ function App() {
       const colW = tw.columnWidth; // already in offscreen pixels (chunky)
       const birdX = Math.round(offW * 0.22);
       // birdR already declared above in the physics block
-      for (const c of g.cols) {
-        c.x -= speedOffPx * dt;
-        const left = c.x - colW / 2;
-        const right = c.x + colW / 2;
-        const gapTop = c.gapY - c.gapH / 2;
-        const gapBot = c.gapY + c.gapH / 2;
-        const horiz = birdX + birdR > left && birdX - birdR < right;
-        if (horiz) {
-          if (g.birdY - birdR < gapTop || g.birdY + birdR > gapBot) {
+      // Skip pipe scroll + collision once the round ends.
+      if (!g.gameOver) {
+        for (const c of g.cols) {
+          c.x -= speedOffPx * dt;
+          const left = c.x - colW / 2;
+          const right = c.x + colW / 2;
+          const gapTop = c.gapY - c.gapH / 2;
+          const gapBot = c.gapY + c.gapH / 2;
+          const horiz = birdX + birdR > left && birdX - birdR < right;
+          if (horiz) {
+            if (g.birdY - birdR < gapTop || g.birdY + birdR > gapBot) {
+              if (!c.hit) {
+                c.hit = true;
+                g.hits++;
+                g.streak = 0;
+                g.flashTimer = 0.5;
+                g.gameOver = true; // single hit ends the round
+              }
+            }
+          }
+          if (!c.scored && c.x < birdX - colW / 2 - birdR) {
+            c.scored = true;
             if (!c.hit) {
-              c.hit = true;
-              g.hits++;
-              g.streak = 0;
-              g.flashTimer = 0.3;
+              g.score++;
+              g.streak++;
+              if (g.streak > g.bestStreak) g.bestStreak = g.streak;
             }
           }
         }
-        if (!c.scored && c.x < birdX - colW / 2 - birdR) {
-          c.scored = true;
-          if (!c.hit) {
-            g.score++;
-            g.streak++;
-            if (g.streak > g.bestStreak) g.bestStreak = g.streak;
-          }
-        }
+        g.cols = g.cols.filter((c) => c.x > -colW);
       }
-      g.cols = g.cols.filter((c) => c.x > -colW);
       if (g.flashTimer > 0) g.flashTimer = Math.max(0, g.flashTimer - dt);
 
       // ── publish HUD state (throttled) ─────────────────────────────────
@@ -541,8 +557,12 @@ function App() {
         });
         setStats((s) => {
           if (s.score === g.score && s.hits === g.hits &&
-              s.streak === g.streak && s.bestStreak === g.bestStreak) return s;
-          return { score: g.score, hits: g.hits, streak: g.streak, bestStreak: g.bestStreak };
+              s.streak === g.streak && s.bestStreak === g.bestStreak &&
+              s.gameOver === g.gameOver) return s;
+          return {
+            score: g.score, hits: g.hits, streak: g.streak,
+            bestStreak: g.bestStreak, gameOver: g.gameOver,
+          };
         });
       }
 
@@ -583,7 +603,11 @@ function App() {
   const resetScore = () => {
     const g = gameRef.current;
     g.score = 0; g.hits = 0; g.streak = 0; g.bestStreak = 0; g.cols = [];
-    setStats({ score: 0, hits: 0, streak: 0, bestStreak: 0 });
+    g.gameOver = false;
+    g.spawnTimer = 0;
+    g.birdVy = 0;
+    g.initialized = false; // re-center bird on next frame
+    setStats({ score: 0, hits: 0, streak: 0, bestStreak: 0, gameOver: false });
   };
 
   // Bar normalisation: target sits ~middle (50%) so user can see deviation.
@@ -649,6 +673,37 @@ function App() {
               ? <>قل <b className="ar-glyph">“{glyphFor(t.letter, 'ar')}”</b></>
               : <>Say <b>“{glyphFor(t.letter, 'en')}”</b></>}
           </div>
+        </div>
+      )}
+      {/* Right-side gamified score panel: spinning coin + popping score number + streak pill */}
+      {phase === 'playing' && !runway.active && !stats.gameOver && (
+        <div className="big-score">
+          <div className="big-score__coin">★</div>
+          <div className="big-score__label">
+            {t.language === 'ar' ? 'النقاط' : 'Score'}
+          </div>
+          <div className="big-score__num" key={stats.score}>{stats.score}</div>
+          {stats.streak > 1 && (
+            <div className="big-score__combo" key={`combo-${stats.streak}`}>
+              ×{stats.streak} {t.language === 'ar' ? 'متتالية' : 'combo'}
+            </div>
+          )}
+        </div>
+      )}
+      {/* Game-over card */}
+      {phase === 'playing' && stats.gameOver && (
+        <div className="gameover-card">
+          <div className="gameover-card__label">
+            {t.language === 'ar' ? 'انتهت اللعبة' : 'Game Over'}
+          </div>
+          <div className="gameover-card__score">{stats.score}</div>
+          <div className="gameover-card__sub">
+            {t.language === 'ar' ? 'أفضل سلسلة' : 'Best streak'} ·{' '}
+            <b>{stats.bestStreak}</b>
+          </div>
+          <button className="btn primary" onClick={resetScore}>
+            {t.language === 'ar' ? 'العب مرة أخرى' : 'Play again'}
+          </button>
         </div>
       )}
       {phase === 'playing' && !runway.active && fallHintAt != null && (

@@ -325,6 +325,104 @@
     text-shadow: 0 1px 3px rgba(0, 0, 0, .5);
   }
   .footnote b { color: var(--accent-3); font-weight: 800; }
+
+  /* Right-side gamified score panel — coin + bouncing number that pops on each tick */
+  .big-score {
+    position: absolute; right: 28px; top: 24%; transform: translateY(-50%);
+    z-index: 5; pointer-events: none;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+  }
+  .big-score__label {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 11px; border-radius: 999px;
+    background: linear-gradient(135deg, #fe2c55, #ff8e3d);
+    color: #fff; font-size: 10.5px; font-weight: 800;
+    letter-spacing: .16em; text-transform: uppercase;
+    box-shadow: 0 6px 16px rgba(254, 44, 85, .4);
+  }
+  .big-score__num {
+    position: relative;
+    font-size: clamp(56px, 7.5vw, 96px);
+    font-weight: 900; line-height: 1;
+    color: var(--accent-3); letter-spacing: -.04em;
+    font-variant-numeric: tabular-nums;
+    text-shadow:
+      -3px 0 0 #000, 3px 0 0 #000, 0 -3px 0 #000, 0 3px 0 #000,
+      -3px -3px 0 #000, 3px -3px 0 #000, -3px 3px 0 #000, 3px 3px 0 #000,
+      0 8px 24px rgba(0, 0, 0, .55);
+    animation: scorePop .32s cubic-bezier(.34, 1.56, .64, 1);
+  }
+  /* Drop shadow + ring around the coin icon */
+  .big-score__coin {
+    width: clamp(36px, 4.5vw, 54px); height: clamp(36px, 4.5vw, 54px);
+    border-radius: 50%;
+    background:
+      radial-gradient(circle at 35% 30%, #fff8c2 0%, #ffe43e 40%, #c89200 100%);
+    box-shadow:
+      0 0 0 3px #000,
+      0 6px 14px rgba(0, 0, 0, .45),
+      inset 0 -4px 0 rgba(0, 0, 0, .25);
+    display: flex; align-items: center; justify-content: center;
+    color: #5b3c00; font-weight: 900;
+    font-size: clamp(18px, 2.4vw, 28px);
+    line-height: 1;
+    animation: coinSpin 2.4s linear infinite;
+    margin-bottom: 4px;
+  }
+  @keyframes coinSpin {
+    0%, 100% { transform: scaleX(1); }
+    50%      { transform: scaleX(.18); }
+  }
+  @keyframes scorePop {
+    0%   { transform: scale(.6); filter: brightness(2); }
+    60%  { transform: scale(1.18); }
+    100% { transform: scale(1); filter: brightness(1); }
+  }
+  /* Combo / streak pill underneath — only shows when streak > 1 */
+  .big-score__combo {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 9px; border-radius: 999px;
+    background: rgba(0, 0, 0, .55);
+    color: var(--accent); font-size: 10.5px; font-weight: 800;
+    letter-spacing: .08em;
+    border: 1.5px solid var(--accent);
+    box-shadow: 0 0 10px rgba(37, 244, 238, .35);
+    animation: scorePop .32s cubic-bezier(.34, 1.56, .64, 1);
+  }
+
+  /* Game-over card — sticker style, big final score, Play Again CTA */
+  .gameover-card {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    z-index: 7; pointer-events: auto;
+    background: var(--panel); color: var(--ink);
+    border-radius: 28px;
+    padding: 28px 36px 24px;
+    box-shadow: var(--pop-strong);
+    text-align: center;
+    min-width: 280px;
+    animation: gameoverIn .35s cubic-bezier(.34, 1.56, .64, 1);
+  }
+  @keyframes gameoverIn {
+    from { opacity: 0; transform: translate(-50%, -50%) scale(.7); }
+    to   { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  }
+  .gameover-card__label {
+    font-size: 13px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--accent-2);
+  }
+  .gameover-card__score {
+    font-size: clamp(72px, 12vw, 128px);
+    font-weight: 800; line-height: 1;
+    letter-spacing: -.04em;
+    color: var(--ink);
+    margin: 4px 0 6px;
+    font-variant-numeric: tabular-nums;
+  }
+  .gameover-card__sub {
+    font-size: 13px; color: rgba(20, 24, 31, .65);
+    margin-bottom: 16px; font-weight: 500;
+  }
+  .gameover-card__sub b { color: var(--ink); font-weight: 800; }
 </style>
 </head>
 <body>
@@ -339,7 +437,7 @@
 <script>
   // Persisted tweak defaults — direct-editable via the toolbar Tweaks toggle.
   window.TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
-    "letter": "z",
+    "letter": "f",
     "language": "en",
     "character": "yellow",
     "targetStrength": 10,
