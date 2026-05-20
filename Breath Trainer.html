@@ -378,6 +378,55 @@
     50%      { opacity: 1; }
   }
 
+  /* How-to list inside the permission card */
+  .howto {
+    text-align: left;
+    margin: -4px 0 14px;
+    padding: 12px 14px;
+    background: rgba(0, 0, 0, .04);
+    border-radius: 14px;
+  }
+  [dir="rtl"] .howto { text-align: right; }
+  .howto__title {
+    font-size: 10.5px; font-weight: 700; letter-spacing: .14em;
+    text-transform: uppercase; color: rgba(20, 24, 31, .55);
+    margin-bottom: 8px;
+  }
+  .howto__list {
+    margin: 0; padding-inline-start: 18px;
+    color: var(--ink); font-size: 13px; line-height: 1.5;
+  }
+  .howto__list li { margin: 2px 0; font-weight: 500; }
+  .howto__letter-row {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin: 0 0 14px;
+    font-size: 13px; color: rgba(20, 24, 31, .65); font-weight: 600;
+  }
+
+  /* Persistent "Say [letter]" badge on the left edge of the game */
+  .say-indicator {
+    position: absolute; left: 22px; top: 50%; transform: translateY(-50%);
+    z-index: 5; pointer-events: none;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    background: var(--panel);
+    border-radius: 22px;
+    padding: 12px 14px 14px;
+    box-shadow: var(--pop);
+  }
+  .say-indicator__label {
+    font-size: 10.5px; font-weight: 700; letter-spacing: .14em;
+    text-transform: uppercase; color: rgba(20, 24, 31, .55);
+  }
+  .say-indicator__glyph {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 50px; height: 50px; padding: 0 10px; border-radius: 14px;
+    background: linear-gradient(135deg, #fe2c55, #ff8e3d);
+    color: #fff;
+    font-weight: 800; font-size: 34px;
+    text-transform: uppercase; line-height: 1;
+    box-shadow: 0 6px 14px rgba(254, 44, 85, .4);
+  }
+
   .footnote b { color: var(--accent-3); font-weight: 800; }
 
   /* Screen-record button: rounded pill in the bottom-right of the screen.
@@ -525,10 +574,10 @@
 <script>
   // Persisted tweak defaults — direct-editable via the toolbar Tweaks toggle.
   window.TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
-    "letter": "n",
+    "letter": "sh",
     "language": "en",
     "character": "yellow",
-    "targetStrength": 10,
+    "targetStrength": 26,
     "sensitivity": 0.5,
     "smoothing": 55,
     "gravity": 300,

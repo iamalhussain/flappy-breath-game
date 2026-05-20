@@ -163,15 +163,13 @@ function PermissionCard({ onStart, error, requesting, letter, language }) {
   const isAr = language === 'ar';
   const T = isAr ? {
     title: 'الطائر الطنّان',
-    body1: 'استمر بإصدار حرف ',
-    body2: ' لإبقاء الطائر طائرًا. توقّف فيسقط.',
+    body1: 'الحرف الحالي: ',
     cta: 'السماح بالكاميرا والمايك',
     requesting: 'جاري طلب الكاميرا والمايك…',
     privacy: 'الفيديو والصوت يبقيان على جهازك — لا يتم رفع شيء.',
   } : {
     title: 'Humming Bird',
-    body1: 'Sustain a steady ',
-    body2: ' to keep the bird in the air. Stop, and it falls.',
+    body1: 'Your letter: ',
     cta: 'Allow camera & mic',
     requesting: 'Requesting camera & mic…',
     privacy: 'Video and audio stay on your device — nothing is uploaded.',
@@ -179,12 +177,11 @@ function PermissionCard({ onStart, error, requesting, letter, language }) {
   return (
     <div className="center-card" dir={isAr ? 'rtl' : 'ltr'}>
       <h1>{T.title}</h1>
-      <p>
+      <p className="howto__letter-row">
         {T.body1}
         <span className={'letter-chip' + (isAr ? ' ar' : '')}>
           <span className={isAr ? 'ar-glyph' : ''}>{glyph}</span>
         </span>
-        {T.body2}
       </p>
       <div className="row">
         <button className="btn primary" onClick={onStart} disabled={requesting}>
@@ -729,6 +726,19 @@ function App() {
             {t.language === 'ar'
               ? <>قل <b className="ar-glyph">“{glyphFor(t.letter, 'ar')}”</b></>
               : <>Say <b>“{glyphFor(t.letter, 'en')}”</b></>}
+          </div>
+        </div>
+      )}
+      {/* Persistent "Say [letter]" badge on the left edge during gameplay
+          (hidden during runway and game-over since those have their own
+          letter callouts). */}
+      {phase === 'playing' && !runway.active && !stats.gameOver && (
+        <div className="say-indicator">
+          <div className="say-indicator__label">
+            {t.language === 'ar' ? 'قل' : 'Say'}
+          </div>
+          <div className={'say-indicator__glyph' + (t.language === 'ar' ? ' ar-glyph' : '')}>
+            {glyphFor(t.letter, t.language)}
           </div>
         </div>
       )}
