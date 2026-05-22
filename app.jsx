@@ -92,7 +92,7 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // thresholds because nasals (m, n) naturally have flatter low-frequency
   // distributions than fricatives — using a single 0.20 floor would gate
   // out perfectly good n's whose energy spreads across V/L/LM evenly.
-  const concentrationMin = { m: 0.16, n: 0.15, v: 0.16 }[letter] ?? 0.20;
+  const concentrationMin = { m: 0.16, n: 0.15, v: 0.16, f: 0.16 }[letter] ?? 0.20;
   const maxFrac = Math.max(fV, fL, fLM, fM, fH, fVH);
   if (maxFrac < concentrationMin) return 0;
 
@@ -152,6 +152,11 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // vs 0.15) keeps phone V's passing while still gating clean vowels
   // (fM+fH+fVH ≈ 0.05) out at ~0.
   const vFricShape    = clamp(((fM + fH + fVH) - 0.08) * 4.0, 0, 1);
+  // F-specific shape gate: same phone-mic high-freq rolloff hits f's
+  // M+H+VH band. f normally has stronger high-freq than v, so its
+  // threshold (0.10) sits between the shared default (0.15) and v's
+  // looser 0.08. Still rejects vowels and quiet breath.
+  const fFricShape    = clamp(((fM + fH + fVH) - 0.10) * 4.0, 0, 1);
 
   const dist = Math.abs(fV - t.V) + Math.abs(fL - t.L) + Math.abs(fLM - t.LM)
              + Math.abs(fM - t.M) + Math.abs(fH - t.H) + Math.abs(fVH - t.VH);
@@ -161,7 +166,7 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   //   n: F2 wanders 1.5–2 kHz across speakers/positions, alveolar contact
   //      varies → 1.6 to keep the score stable
   const matchTolByLetter = {
-    s: 1.2, z: 1.2, sh: 1.2, f: 1.6, v: 1.8, m: 1.7, n: 1.9,
+    s: 1.2, z: 1.2, sh: 1.2, f: 1.9, v: 1.8, m: 1.7, n: 1.9,
   };
   const matchTol = matchTolByLetter[letter] ?? 1.2;
   const match = Math.max(0, 1 - dist / matchTol);
@@ -173,13 +178,13 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // strengths instead of one being twice the other.
   const totalE = H + VH * 1.2 + M * 0.9 + L * 0.7 + V * 0.7 + LM * 0.6;
   const scaleByLetter = {
-    s: 2.4, z: 1.5, sh: 2.6, f: 4.9, v: 6.8, m: 1.7, n: 7.5,
+    s: 2.4, z: 1.5, sh: 2.6, f: 6.0, v: 6.8, m: 1.7, n: 7.5,
   };
   const gateByLetter = {
     s:  voicelessGate * fricShape,
     z:  voicedGate    * fricShape,
     sh: voicelessGate * fricShape,
-    f:  voicelessGate * fricShape,
+    f:  voicelessGate * fFricShape,
     v:  voicedGate    * vFricShape,
     // Nasals additionally require voicing — without it, low-amplitude
     // background noise was passing the m gate and flying the bird up.
