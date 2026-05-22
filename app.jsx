@@ -166,12 +166,12 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // rejecting nasals (fM+fH+fVH ≈ 0.05) and quiet breath.
   const sFricShape    = clamp(((fM + fH + fVH) - 0.10) * 4.0, 0, 1);
   // Anti-noise gate for nasals: real m and n have near-zero energy in
-  // the M/H/VH bands (mouth is closed → no oral airflow turbulence),
-  // typical sum 0.03-0.10. *All* background noise patterns — fans, AC,
-  // breath, broadband bleed — carry meaningful energy above 2 kHz, so
-  // their sum lives in 0.20+. Hard gate: full pass at sum ≤ 0.10,
-  // fully closed at sum ≥ 0.25.
-  const nasalAntiNoise = clamp((0.25 - (fM + fH + fVH)) * 7.0, 0, 1);
+  // the M/H/VH bands (mouth is closed → no oral airflow turbulence).
+  // Threshold relaxed to 0.32 because phone mics often produce nasals
+  // with fM+fH+fVH around 0.15-0.20 (DSP artifacts, breath leakage),
+  // and the old 0.25 hard floor was killing legit phone-M/N. Noise
+  // (fans, AC, broadband) still lives well above 0.32.
+  const nasalAntiNoise = clamp((0.32 - (fM + fH + fVH)) * 6.0, 0, 1);
   // Nasal concentration ratio: real m/n concentrate energy in V+L so
   // hard that the ratio (V+L)/(M+H+VH) sits around 15-20. *Any* noise
   // — even low-freq AC hum where (M+H+VH) is small — never concentrates
@@ -200,12 +200,10 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
     1 / 6,
   );
   const flatness = geoMean * 6;
-  const nasalPeaked = clamp((0.80 - flatness) * 10, 0, 1);
-  // Minimum-energy floor for nasals: real m/n is a sustained voiced
-  // sound — even at conversational volume totalE > 0.15. Pure ambient
-  // background rarely produces totalE above 0.10 unless something
-  // unusual is happening. Hard cutoff below 0.10, full pass above 0.18.
-  const nasalEnergyFloor = clamp((totalE - 0.10) * 12, 0, 1);
+  // Threshold loosened to 0.85 so phone-M/N with slight extra spread
+  // (typical 0.65-0.75 flatness on phones) still passes cleanly.
+  // Real noise is still well above 0.85.
+  const nasalPeaked = clamp((0.85 - flatness) * 8, 0, 1);
 
   // Distance from spectral template. Most letters use uniform L1 (every
   // band contributes equally), but f gets a discriminative-weighted L1:
@@ -293,7 +291,7 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   const scaleByLetter = {
     // f scale dialed down to 4.5 to compensate for the sqrt expansion;
     // net loud-f output is similar, but quiet-f is dramatically louder.
-    s: 6.0, z: 2.1, sh: 5.5, f: 7.0, v: 6.3, m: 1.7, n: 7.5,
+    s: 6.0, z: 2.1, sh: 6.5, f: 7.0, v: 6.3, m: 1.7, n: 7.5,
   };
   const gateByLetter = {
     s:  voicelessGate * sFricShape,
@@ -302,17 +300,15 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
     f:  voicelessGate * fFricShape,
     v:  voicedGate    * vFricShape,
     // Nasals additionally require voicing AND must look like voice (not
-    // noise). Five layers of defense:
-    //   nasalAntiNoise   — absolute M+H+VH must be near-zero
-    //   nasalRatioGate   — (V+L) must dominate (M+H+VH) by 2×+
-    //   nasalPeaked      — spectral flatness must be < 0.80 (peaked spectrum)
-    //   nasalEnergyFloor — total energy must clear 0.10 (real voice)
-    // All multiplied — noise has to fool ALL five tests simultaneously
-    // to leak through, which means simulating real voice almost perfectly.
-    m: mGate * mNasalShape * mVoicedGate * nasalAntiNoise * nasalRatioGate
-       * nasalPeaked * nasalEnergyFloor,
-    n: nGate * nNasalShape * nVoicedGate * nasalAntiNoise * nasalRatioGate
-       * nasalPeaked * nasalEnergyFloor,
+    // noise). Layered defense:
+    //   nasalAntiNoise — absolute M+H+VH must be moderate-or-less
+    //   nasalRatioGate — (V+L) must dominate (M+H+VH) by 2×+
+    //   nasalPeaked    — spectral flatness must be < 0.85 (peaked)
+    // The adaptive noise floor at letterStrength's entry already ensures
+    // signal > ambient × gateMult, so no separate energy floor needed
+    // (that was killing legit weak phone-M/N).
+    m: mGate * mNasalShape * mVoicedGate * nasalAntiNoise * nasalRatioGate * nasalPeaked,
+    n: nGate * nNasalShape * nVoicedGate * nasalAntiNoise * nasalRatioGate * nasalPeaked,
   };
   return clamp(
     matchSq * energyTerm * scaleByLetter[letter] * gateByLetter[letter],
