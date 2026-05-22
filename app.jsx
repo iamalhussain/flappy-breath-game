@@ -170,9 +170,18 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // typical sum 0.03-0.10. *All* background noise patterns — fans, AC,
   // breath, broadband bleed — carry meaningful energy above 2 kHz, so
   // their sum lives in 0.20+. Hard gate: full pass at sum ≤ 0.10,
-  // fully closed at sum ≥ 0.25. This is the cleanest single-feature
-  // separator between voiced nasals and any other audible event.
+  // fully closed at sum ≥ 0.25.
   const nasalAntiNoise = clamp((0.25 - (fM + fH + fVH)) * 7.0, 0, 1);
+  // Nasal concentration ratio: real m/n concentrate energy in V+L so
+  // hard that the ratio (V+L)/(M+H+VH) sits around 15-20. *Any* noise
+  // — even low-freq AC hum where (M+H+VH) is small — never concentrates
+  // tighter than ~2-3, because noise by definition has some spread. This
+  // catches the low-freq noise that nasalAntiNoise alone misses: AC hum
+  // has small M+H+VH so passes nasalAntiNoise, but its (V+L)/(M+H+VH)
+  // ratio is only ~2-3 because L/LM energy is also present. Gate fully
+  // opens at ratio ≥ 7, fully closes at ratio ≤ 2.
+  const nasalRatio = (fV + fL) / Math.max(0.01, fM + fH + fVH);
+  const nasalRatioGate = clamp((nasalRatio - 2.0) / 5.0, 0, 1);
 
   // Distance from spectral template. Most letters use uniform L1 (every
   // band contributes equally), but f gets a discriminative-weighted L1:
@@ -263,11 +272,12 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
     v:  voicedGate    * vFricShape,
     // Nasals additionally require voicing — without it, low-amplitude
     // background noise was passing the m gate and flying the bird up.
-    // nasalAntiNoise is the strongest single-feature noise rejector
-    // (M/H/VH must be near-zero), applied last so other gates can't
-    // accidentally pass loud background.
-    m:  mGate         * mNasalShape * mVoicedGate * nasalAntiNoise,
-    n:  nGate         * nNasalShape * nVoicedGate * nasalAntiNoise,
+    // nasalAntiNoise catches high-freq noise (mouth-closed test);
+    // nasalRatioGate catches low-freq noise (concentration test).
+    // Both multiplied so noise needs to look nasal in absolute AND
+    // relative terms before the score builds.
+    m:  mGate         * mNasalShape * mVoicedGate * nasalAntiNoise * nasalRatioGate,
+    n:  nGate         * nNasalShape * nVoicedGate * nasalAntiNoise * nasalRatioGate,
   };
   return clamp(
     matchSq * energyTerm * scaleByLetter[letter] * gateByLetter[letter],
