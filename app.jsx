@@ -181,6 +181,13 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
     // way past the match threshold because noise *always* has some H/VH
     // energy and n has near-zero — the weighted disagreement compounds.
     n: { V: 1.5, L: 1.0, LM: 3.0, M: 1.5, H: 3.5, VH: 4.0 },
+    // M is the mirror of N: same heavy H/VH weights to reject noise
+    // (M has near-zero high-freq too — mouth is closed). The N-vs-M
+    // separator is LM (n has elevated F2, m doesn't), so LM weighted
+    // heavily. L is m's signature first-formant peak — weighting it
+    // protects against bleed from vowels which have a different L/V
+    // balance.
+    m: { V: 1.5, L: 2.0, LM: 3.0, M: 2.0, H: 3.0, VH: 3.5 },
   };
   const w = distWeights[letter];
   let dist;
@@ -202,7 +209,7 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   //      ratio of "right" to "wrong" dist is what matters, not absolute.
   //   m, n: F2 / nasal-shape variability across speakers → relaxed.
   const matchTolByLetter = {
-    s: 1.2, z: 1.2, sh: 1.2, f: 3.0, v: 1.8, m: 1.7, n: 4.0,
+    s: 1.2, z: 1.2, sh: 1.2, f: 3.0, v: 1.8, m: 4.0, n: 4.0,
   };
   const matchTol = matchTolByLetter[letter] ?? 1.2;
   const match = Math.max(0, 1 - dist / matchTol);
