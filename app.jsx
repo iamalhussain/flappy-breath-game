@@ -232,7 +232,7 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   const scaleByLetter = {
     // f scale dialed down to 4.5 to compensate for the sqrt expansion;
     // net loud-f output is similar, but quiet-f is dramatically louder.
-    s: 2.4, z: 2.1, sh: 2.6, f: 4.5, v: 6.8, m: 1.7, n: 7.5,
+    s: 2.4, z: 2.1, sh: 3.5, f: 4.5, v: 6.8, m: 1.7, n: 7.5,
   };
   const gateByLetter = {
     s:  voicelessGate * fricShape,
