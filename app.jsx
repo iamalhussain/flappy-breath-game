@@ -182,6 +182,30 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // opens at ratio ≥ 7, fully closes at ratio ≤ 2.
   const nasalRatio = (fV + fL) / Math.max(0.01, fM + fH + fVH);
   const nasalRatioGate = clamp((nasalRatio - 2.0) / 5.0, 0, 1);
+  // Spectral flatness — geometric mean / arithmetic mean of band fractions.
+  // This is the textbook voice-vs-noise discriminator:
+  //   real m  → flatness ≈ 0.36 (very peaked, energy in V+L)
+  //   real n  → flatness ≈ 0.61 (peaked, but less than m)
+  //   vowel   → flatness ≈ 0.45 (peaked)
+  //   low-freq noise (AC) → flatness ≈ 0.85
+  //   broadband noise     → flatness ≈ 0.95
+  // arithMean is always 1/6 because fractions sum to 1, so flatness =
+  // geoMean × 6. Gate fully open at flatness ≤ 0.70, fully closed
+  // above 0.80 — clean separator with no false rejections of real
+  // nasals even with pronunciation variation.
+  const _eps = 0.005;
+  const geoMean = Math.pow(
+    Math.max(_eps, fV) * Math.max(_eps, fL) * Math.max(_eps, fLM)
+    * Math.max(_eps, fM) * Math.max(_eps, fH) * Math.max(_eps, fVH),
+    1 / 6,
+  );
+  const flatness = geoMean * 6;
+  const nasalPeaked = clamp((0.80 - flatness) * 10, 0, 1);
+  // Minimum-energy floor for nasals: real m/n is a sustained voiced
+  // sound — even at conversational volume totalE > 0.15. Pure ambient
+  // background rarely produces totalE above 0.10 unless something
+  // unusual is happening. Hard cutoff below 0.10, full pass above 0.18.
+  const nasalEnergyFloor = clamp((totalE - 0.10) * 12, 0, 1);
 
   // Distance from spectral template. Most letters use uniform L1 (every
   // band contributes equally), but f gets a discriminative-weighted L1:
@@ -269,7 +293,7 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   const scaleByLetter = {
     // f scale dialed down to 4.5 to compensate for the sqrt expansion;
     // net loud-f output is similar, but quiet-f is dramatically louder.
-    s: 5.0, z: 2.1, sh: 4.5, f: 6.0, v: 6.3, m: 1.7, n: 7.5,
+    s: 6.0, z: 2.1, sh: 5.5, f: 7.0, v: 6.3, m: 1.7, n: 7.5,
   };
   const gateByLetter = {
     s:  voicelessGate * sFricShape,
@@ -277,14 +301,18 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
     sh: voicelessGate * fricShape,
     f:  voicelessGate * fFricShape,
     v:  voicedGate    * vFricShape,
-    // Nasals additionally require voicing — without it, low-amplitude
-    // background noise was passing the m gate and flying the bird up.
-    // nasalAntiNoise catches high-freq noise (mouth-closed test);
-    // nasalRatioGate catches low-freq noise (concentration test).
-    // Both multiplied so noise needs to look nasal in absolute AND
-    // relative terms before the score builds.
-    m:  mGate         * mNasalShape * mVoicedGate * nasalAntiNoise * nasalRatioGate,
-    n:  nGate         * nNasalShape * nVoicedGate * nasalAntiNoise * nasalRatioGate,
+    // Nasals additionally require voicing AND must look like voice (not
+    // noise). Five layers of defense:
+    //   nasalAntiNoise   — absolute M+H+VH must be near-zero
+    //   nasalRatioGate   — (V+L) must dominate (M+H+VH) by 2×+
+    //   nasalPeaked      — spectral flatness must be < 0.80 (peaked spectrum)
+    //   nasalEnergyFloor — total energy must clear 0.10 (real voice)
+    // All multiplied — noise has to fool ALL five tests simultaneously
+    // to leak through, which means simulating real voice almost perfectly.
+    m: mGate * mNasalShape * mVoicedGate * nasalAntiNoise * nasalRatioGate
+       * nasalPeaked * nasalEnergyFloor,
+    n: nGate * nNasalShape * nVoicedGate * nasalAntiNoise * nasalRatioGate
+       * nasalPeaked * nasalEnergyFloor,
   };
   return clamp(
     matchSq * energyTerm * scaleByLetter[letter] * gateByLetter[letter],
