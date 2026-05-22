@@ -92,7 +92,7 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // thresholds because nasals (m, n) naturally have flatter low-frequency
   // distributions than fricatives — using a single 0.20 floor would gate
   // out perfectly good n's whose energy spreads across V/L/LM evenly.
-  const concentrationMin = { m: 0.16, n: 0.22, v: 0.16, f: 0.16 }[letter] ?? 0.20;
+  const concentrationMin = { m: 0.16, n: 0.22, v: 0.16, f: 0.12 }[letter] ?? 0.20;
   const maxFrac = Math.max(fV, fL, fLM, fM, fH, fVH);
   if (maxFrac < concentrationMin) return 0;
 
@@ -154,11 +154,12 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // vs 0.15) keeps phone V's passing while still gating clean vowels
   // (fM+fH+fVH ≈ 0.05) out at ~0.
   const vFricShape    = clamp(((fM + fH + fVH) - 0.08) * 4.0, 0, 1);
-  // F-specific shape gate: same phone-mic high-freq rolloff hits f's
-  // M+H+VH band. f normally has stronger high-freq than v, so its
-  // threshold (0.10) sits between the shared default (0.15) and v's
-  // looser 0.08. Still rejects vowels and quiet breath.
-  const fFricShape    = clamp(((fM + fH + fVH) - 0.10) * 4.0, 0, 1);
+  // F-specific shape gate: phones with heavy noise-suppression algorithms
+  // can squash f's high-freq airflow down to fM+fH+fVH ≈ 0.10-0.15.
+  // Drop the threshold to 0.05 so even a heavily-suppressed f still
+  // produces a meaningful gate value. Real vowels rarely top 0.10 here
+  // so discrimination holds (their voicedGate hits 0 too).
+  const fFricShape    = clamp(((fM + fH + fVH) - 0.05) * 4.0, 0, 1);
   // Anti-noise gate for nasals: real m and n have near-zero energy in
   // the M/H/VH bands (mouth is closed → no oral airflow turbulence),
   // typical sum 0.03-0.10. *All* background noise patterns — fans, AC,
@@ -234,13 +235,13 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // output was linear in amplitude. With sqrt, totalE=0.1 boosts from
   // 0.1 → 0.316 (~3× sensitivity gain at the quiet end), while totalE=1
   // stays at 1 (no change at the loud end).
-  const energyCurve = { f: 0.5 };
+  const energyCurve = { f: 0.4 };
   const exp = energyCurve[letter] ?? 1.0;
   const energyTerm = exp === 1.0 ? totalE : Math.pow(totalE, exp);
   const scaleByLetter = {
     // f scale dialed down to 4.5 to compensate for the sqrt expansion;
     // net loud-f output is similar, but quiet-f is dramatically louder.
-    s: 3.2, z: 2.1, sh: 3.5, f: 4.5, v: 6.3, m: 1.7, n: 7.5,
+    s: 3.2, z: 2.1, sh: 3.5, f: 6.0, v: 6.3, m: 1.7, n: 7.5,
   };
   const gateByLetter = {
     s:  voicelessGate * fricShape,
