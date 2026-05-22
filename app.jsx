@@ -159,6 +159,14 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // threshold (0.10) sits between the shared default (0.15) and v's
   // looser 0.08. Still rejects vowels and quiet breath.
   const fFricShape    = clamp(((fM + fH + fVH) - 0.10) * 4.0, 0, 1);
+  // Anti-noise gate for nasals: real m and n have near-zero energy in
+  // the M/H/VH bands (mouth is closed → no oral airflow turbulence),
+  // typical sum 0.03-0.10. *All* background noise patterns — fans, AC,
+  // breath, broadband bleed — carry meaningful energy above 2 kHz, so
+  // their sum lives in 0.20+. Hard gate: full pass at sum ≤ 0.10,
+  // fully closed at sum ≥ 0.25. This is the cleanest single-feature
+  // separator between voiced nasals and any other audible event.
+  const nasalAntiNoise = clamp((0.25 - (fM + fH + fVH)) * 7.0, 0, 1);
 
   // Distance from spectral template. Most letters use uniform L1 (every
   // band contributes equally), but f gets a discriminative-weighted L1:
@@ -242,8 +250,11 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
     v:  voicedGate    * vFricShape,
     // Nasals additionally require voicing — without it, low-amplitude
     // background noise was passing the m gate and flying the bird up.
-    m:  mGate         * mNasalShape * mVoicedGate,
-    n:  nGate         * nNasalShape * nVoicedGate,
+    // nasalAntiNoise is the strongest single-feature noise rejector
+    // (M/H/VH must be near-zero), applied last so other gates can't
+    // accidentally pass loud background.
+    m:  mGate         * mNasalShape * mVoicedGate * nasalAntiNoise,
+    n:  nGate         * nNasalShape * nVoicedGate * nasalAntiNoise,
   };
   return clamp(
     matchSq * energyTerm * scaleByLetter[letter] * gateByLetter[letter],
