@@ -160,6 +160,11 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // produces a meaningful gate value. Real vowels rarely top 0.10 here
   // so discrimination holds (their voicedGate hits 0 too).
   const fFricShape    = clamp(((fM + fH + fVH) - 0.05) * 4.0, 0, 1);
+  // S-specific shape gate: phones cut VH most aggressively, so s's
+  // M+H+VH sum lands lower than its desktop ~0.85. Threshold 0.10
+  // accommodates phone-s (typically 0.40-0.60 here) while still
+  // rejecting nasals (fM+fH+fVH ≈ 0.05) and quiet breath.
+  const sFricShape    = clamp(((fM + fH + fVH) - 0.10) * 4.0, 0, 1);
   // Anti-noise gate for nasals: real m and n have near-zero energy in
   // the M/H/VH bands (mouth is closed → no oral airflow turbulence),
   // typical sum 0.03-0.10. *All* background noise patterns — fans, AC,
@@ -197,6 +202,13 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
     // protects against bleed from vowels which have a different L/V
     // balance.
     m: { V: 1.5, L: 2.0, LM: 3.0, M: 2.0, H: 3.0, VH: 3.5 },
+    // S is defined by HIGH-frequency airflow, but phone mics aggressively
+    // roll off 7+ kHz — so VH (s's signature band) is unreliable on
+    // phones. Down-weighting VH (0.5) prevents the phone rolloff from
+    // killing the match, while up-weighting H (2.5) and V (2.5, the
+    // voicelessness check) keeps discrimination strong. Low bands
+    // (L, LM) carry no s information — barely weighted.
+    s: { V: 2.5, L: 0.5, LM: 0.5, M: 1.0, H: 2.5, VH: 0.5 },
   };
   const w = distWeights[letter];
   let dist;
@@ -218,7 +230,7 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   //      ratio of "right" to "wrong" dist is what matters, not absolute.
   //   m, n: F2 / nasal-shape variability across speakers → relaxed.
   const matchTolByLetter = {
-    s: 1.2, z: 1.2, sh: 1.2, f: 3.0, v: 1.8, m: 4.0, n: 4.0,
+    s: 2.0, z: 1.2, sh: 1.2, f: 3.0, v: 1.8, m: 4.0, n: 4.0,
   };
   const matchTol = matchTolByLetter[letter] ?? 1.2;
   const match = Math.max(0, 1 - dist / matchTol);
@@ -235,16 +247,16 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // output was linear in amplitude. With sqrt, totalE=0.1 boosts from
   // 0.1 → 0.316 (~3× sensitivity gain at the quiet end), while totalE=1
   // stays at 1 (no change at the loud end).
-  const energyCurve = { f: 0.4 };
+  const energyCurve = { f: 0.4, s: 0.5 };
   const exp = energyCurve[letter] ?? 1.0;
   const energyTerm = exp === 1.0 ? totalE : Math.pow(totalE, exp);
   const scaleByLetter = {
     // f scale dialed down to 4.5 to compensate for the sqrt expansion;
     // net loud-f output is similar, but quiet-f is dramatically louder.
-    s: 3.2, z: 2.1, sh: 4.5, f: 6.0, v: 6.3, m: 1.7, n: 7.5,
+    s: 5.0, z: 2.1, sh: 4.5, f: 6.0, v: 6.3, m: 1.7, n: 7.5,
   };
   const gateByLetter = {
-    s:  voicelessGate * fricShape,
+    s:  voicelessGate * sFricShape,
     z:  voicedGate    * fricShape,
     sh: voicelessGate * fricShape,
     f:  voicelessGate * fFricShape,
