@@ -196,7 +196,14 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // higher weight; bands that carry little signal get lower weight.
   // Letters without an entry use uniform weights (all 1.0).
   const distWeights = {
-    f: { V: 2.5, L: 0.5, LM: 1.0, M: 1.5, H: 2.5, VH: 1.5 },
+    // V weight reduced to 1.0 because voicelessGate (below) already
+    // penalizes voicing — double-weighting was making f picky about any
+    // breath that contained a hint of vocal-fold vibration. M and H
+    // balanced at 2.0 each so neither has to perfectly match the
+    // template: f varies a lot in M/H ratio depending on lip/teeth
+    // position. VH and LM get modest weights to maintain separation
+    // from s (VH-heavy) and sh (LM bleed).
+    f: { V: 1.0, L: 0.5, LM: 1.0, M: 2.0, H: 2.0, VH: 1.5 },
     // N is defined by its LM peak (F2) — that's the M-vs-N separator.
     // High-frequency presence is the noise-vs-N separator: room hum,
     // breath, and broadband background bleed all have energy in H/VH
@@ -239,7 +246,7 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   //      ratio of "right" to "wrong" dist is what matters, not absolute.
   //   m, n: F2 / nasal-shape variability across speakers → relaxed.
   const matchTolByLetter = {
-    s: 2.0, z: 1.2, sh: 1.2, f: 3.0, v: 1.8, m: 4.0, n: 4.0,
+    s: 2.0, z: 1.2, sh: 1.2, f: 4.0, v: 1.8, m: 4.0, n: 4.0,
   };
   const matchTol = matchTolByLetter[letter] ?? 1.2;
   const match = Math.max(0, 1 - dist / matchTol);
