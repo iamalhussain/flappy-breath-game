@@ -32,6 +32,28 @@ function bandEnergy(freqData, sampleRate, fftSize, loHz, hiHz) {
   return n > 0 ? (sum / n) / 255 : 0;
 }
 
+// Peak-to-mean ratio of FFT bins within a band. Voice has sharp formant
+// peaks inside bands (e.g. M's F1 ~250 Hz creates a tall bin inside the
+// V band 80-350 Hz) → peakiness 2-4. Noise (white, pink, brown — any
+// spectrum without harmonic structure) has smooth distributions inside
+// bands → peakiness ~1.0-1.4. This is the cleanest single-feature
+// voice-vs-noise discriminator that simple band-fraction analysis
+// can't capture.
+function bandPeakRatio(freqData, sampleRate, fftSize, loHz, hiHz) {
+  const nyquist = sampleRate / 2;
+  const bins = freqData.length;
+  const lo = clamp(Math.floor((loHz / nyquist) * bins), 0, bins - 1);
+  const hi = clamp(Math.ceil((hiHz / nyquist) * bins), 0, bins - 1);
+  let sum = 0, max = 0, n = 0;
+  for (let i = lo; i <= hi; i++) {
+    sum += freqData[i];
+    if (freqData[i] > max) max = freqData[i];
+    n++;
+  }
+  if (n === 0 || sum === 0) return 1;
+  return (max * n) / sum;
+}
+
 // Score how strongly the input matches the target letter, in 0..1.
 // Fricatives (s, z, sh, f, v) are high-frequency continuants — their energy
 // concentrates above 2-3 kHz with almost nothing below. Nasals (m, n) are
@@ -208,17 +230,24 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // Hard cutoffs for nasals: ambient noise must be REJECTED to zero,
   // not just attenuated — even a small fractional score keeps the bird
   // hovering instead of falling, which breaks the game's "silence →
-  // fall" contract. Soft gates above let small noise leak through; hard
-  // if-returns here ensure ambient produces exactly 0 output.
-  // Thresholds calibrated wide enough that even noisy-phone-M/N passes:
-  //   real m  → fM+fH+fVH ≈ 0.05, flatness ≈ 0.36, ratio ≈ 17
-  //   real n  → fM+fH+fVH ≈ 0.20, flatness ≈ 0.61, ratio ≈ 2.75
-  //   phone n with leakage → fM+fH+fVH ≈ 0.25, flatness ≈ 0.75, ratio ≈ 1.8
-  //   ambient noise → fM+fH+fVH ≥ 0.30 OR flatness ≥ 0.85 OR ratio ≤ 1.3
+  // fall" contract.
+  //
+  // The killer addition is formant peakiness: pink/brown/white noise
+  // can mimic a nasal's band-fraction shape (low-freq dominant,
+  // moderately peaked), but only real voice has SHARP formant peaks
+  // INSIDE individual bands. Measuring max-bin-vs-mean-bin within the
+  // V band (where M/N's F1 lives at ~250 Hz) cleanly separates voice
+  // from any kind of noise — voice ≥ 2.0, noise typically 1.0-1.4.
   if (letter === 'm' || letter === 'n') {
     if (fM + fH + fVH > 0.30) return 0;
     if (flatness > 0.82) return 0;
     if (nasalRatio < 1.3) return 0;
+    // Real M/N has a formant peak somewhere in V (80-350 Hz, F1) or
+    // L (350-800 Hz, harmonic). Noise without harmonic structure
+    // can't produce this — it's smooth inside every band.
+    const vPeak = bandPeakRatio(freqData, sampleRate, fftSize, 80, 350);
+    const lPeak = bandPeakRatio(freqData, sampleRate, fftSize, 350, 800);
+    if (Math.max(vPeak, lPeak) < 1.7) return 0;
   }
 
   // Distance from spectral template. Most letters use uniform L1 (every
