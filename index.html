@@ -32,6 +32,12 @@
     margin: 0; height: 100%; background: var(--bg); color: var(--fg);
     font-family: 'Inter', system-ui, -apple-system, sans-serif;
     -webkit-font-smoothing: antialiased; overflow: hidden;
+    /* Prevents iOS Safari double-tap-to-zoom and removes the 300ms tap
+       delay. Also blocks the pull-to-refresh gesture from interfering. */
+    touch-action: manipulation;
+    -webkit-user-select: none; user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
   }
   .mono { font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace; }
   /* When the document language is set to Arabic the entire UI flips
@@ -170,6 +176,84 @@
     background: rgba(0, 0, 0, .05); color: var(--ink);
   }
   .btn.ghost:hover { background: rgba(0, 0, 0, .1); }
+  /* Square icon buttons used on the permission card — same colors as the
+     pill .btn variants, but sized for an SVG glyph instead of text. */
+  .btn.btn--icon {
+    width: 64px; height: 64px; padding: 0;
+    border-radius: 18px;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .btn.btn--icon svg { display: block; }
+  /* Vertical stack: icon button on top, short label beneath. */
+  .btn-col {
+    display: inline-flex; flex-direction: column;
+    align-items: center; gap: 8px;
+  }
+  .btn-col__lbl {
+    font-size: 11px; font-weight: 600; letter-spacing: .02em;
+    color: rgba(20, 24, 31, .6);
+    white-space: nowrap;
+  }
+  /* Language toggle pinned to the top-right of the permission card.
+     Pill container with two segments; the active one gets a white chip. */
+  .lang-switch {
+    position: absolute; top: 14px; right: 14px;
+    display: inline-flex; gap: 2px;
+    padding: 3px; border-radius: 999px;
+    background: rgba(0, 0, 0, .06);
+  }
+  .lang-btn {
+    appearance: none; border: 0; cursor: pointer;
+    padding: 8px 14px; min-width: 44px; min-height: 32px;
+    font: inherit; font-weight: 700; font-size: 12px;
+    letter-spacing: .06em;
+    border-radius: 999px;
+    background: transparent;
+    color: rgba(20, 24, 31, .55);
+    transition: background .12s ease, color .12s ease;
+  }
+  .lang-btn:hover { color: var(--ink); }
+  .lang-btn.on {
+    background: #fff; color: var(--ink);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .12);
+  }
+  /* Short "How to play" block on the permission card. Tinted panel with
+     three numbered steps. Centered title, body left-aligned (start-aligned
+     so it flips in RTL/Arabic). */
+  .howto {
+    margin: 4px 0 16px;
+    padding: 10px 14px 12px;
+    background: rgba(0, 0, 0, .04);
+    border-radius: 12px;
+    text-align: start;
+  }
+  .howto__title {
+    font-size: 10.5px; font-weight: 700; letter-spacing: .12em;
+    text-transform: uppercase;
+    color: rgba(20, 24, 31, .55);
+    margin-bottom: 6px; text-align: center;
+  }
+  .howto__steps {
+    margin: 0; padding: 0; list-style: none;
+    counter-reset: step;
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .howto__steps li {
+    counter-increment: step;
+    position: relative;
+    padding-inline-start: 22px;
+    font-size: 12.5px; line-height: 1.4;
+    color: rgba(20, 24, 31, .78); font-weight: 500;
+  }
+  .howto__steps li::before {
+    content: counter(step);
+    position: absolute; inset-inline-start: 0; top: 0;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--accent-2); color: #fff;
+    font-size: 9.5px; font-weight: 800; letter-spacing: 0;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
 
   .hint-row {
     display: inline-flex; align-items: center; gap: 8px;
@@ -351,14 +435,20 @@
   /* Screen-record button: rounded white pill with a red dot or square,
      bottom-right of the viewport. */
   .record-btn {
-    position: absolute; right: 22px; bottom: 22px; z-index: 6;
+    /* `env(safe-area-inset-bottom)` lifts the button above the iPhone home
+       indicator so iOS doesn't intercept taps near the bottom edge. */
+    position: absolute; right: 22px;
+    bottom: calc(22px + env(safe-area-inset-bottom, 0px) + 20px);
+    z-index: 8;
     appearance: none; border: 0;
     display: inline-flex; align-items: center; gap: 8px;
-    padding: 10px 14px; border-radius: 999px;
+    padding: 12px 18px; min-height: 44px; min-width: 44px;
+    border-radius: 999px;
     background: var(--panel); color: var(--ink);
     font: inherit; font-weight: 700; font-size: 13px;
     box-shadow: var(--pop);
     cursor: pointer;
+    touch-action: manipulation;
     transition: transform .12s ease, box-shadow .12s ease;
   }
   .record-btn:hover { transform: translateY(-1px); box-shadow: var(--pop-strong); }
@@ -431,16 +521,21 @@
 
   /* Screen-record button: rounded pill in the bottom-right of the screen.
      Idle: white pill with a red dot. Recording: hot-pink pill with a
-     pulsing white square. */
+     pulsing white square. `env(safe-area-inset-bottom)` lifts it above the
+     iPhone home indicator so iOS doesn't intercept taps near the edge. */
   .record-btn {
-    position: absolute; right: 22px; bottom: 22px; z-index: 6;
+    position: absolute; right: 22px;
+    bottom: calc(22px + env(safe-area-inset-bottom, 0px) + 20px);
+    z-index: 8;
     appearance: none; border: 0;
     display: inline-flex; align-items: center; gap: 8px;
-    padding: 10px 14px; border-radius: 999px;
+    padding: 12px 18px; min-height: 44px; min-width: 44px;
+    border-radius: 999px;
     background: var(--panel); color: var(--ink);
     font: inherit; font-weight: 700; font-size: 13px;
     box-shadow: var(--pop);
     cursor: pointer;
+    touch-action: manipulation;
     transition: transform .12s ease, box-shadow .12s ease;
   }
   .record-btn:hover { transform: translateY(-1px); box-shadow: var(--pop-strong); }
@@ -536,7 +631,7 @@
     padding: 28px 36px 24px;
     box-shadow: var(--pop-strong);
     text-align: center;
-    min-width: 280px;
+    min-width: 280px; max-width: min(420px, 90vw);
     animation: gameoverIn .35s cubic-bezier(.34, 1.56, .64, 1);
   }
   @keyframes gameoverIn {
@@ -560,6 +655,27 @@
     margin-bottom: 16px; font-weight: 500;
   }
   .gameover-card__sub b { color: var(--ink); font-weight: 800; }
+  /* "Did you know..." block — short voice-coaching fact per letter, shown
+     between the score and the Play-again button on the game-over card. */
+  .gameover-card__fact {
+    margin: 4px 0 18px;
+    padding: 12px 14px;
+    background: rgba(37, 244, 238, .10);
+    border-inline-start: 3px solid var(--accent);
+    border-radius: 10px;
+    text-align: start;
+  }
+  .gameover-card__fact-label {
+    font-size: 10px; font-weight: 700; letter-spacing: .12em;
+    text-transform: uppercase;
+    color: #0aa898;
+    margin-bottom: 6px;
+  }
+  .gameover-card__fact-text {
+    font-size: 12.5px; line-height: 1.55;
+    color: rgba(20, 24, 31, .82);
+    font-weight: 500;
+  }
 </style>
 </head>
 <body>
@@ -577,8 +693,9 @@
     "letter": "m",
     "language": "en",
     "character": "yellow",
-    "targetStrength": 26,
+    "targetStrengthByLetter": { "s": 37, "z": 58, "sh": 50, "f": 40, "v": 40, "m": 40, "n": 55 },
     "sensitivity": 0.5,
+    "noiseGate": 2.5,
     "smoothing": 55,
     "gravity": 300,
     "gapSize": 49,

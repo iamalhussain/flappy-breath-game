@@ -42,7 +42,13 @@ function bandEnergy(freqData, sampleRate, fftSize, loHz, hiHz) {
 // energy, plus a per-letter scale so a strong "m" and a strong "s"
 // produce similar output strengths instead of "m" dominating because
 // nasals naturally pack more raw energy than fricatives.
-function letterStrength(freqData, sampleRate, fftSize, letter) {
+// Module-level adaptive noise floor estimate. Tracks the running average
+// of the *quiet* moments (samples whose total energy is in the noise zone)
+// so the silence threshold scales with the room: a noisy environment ends
+// up with a higher floor and rejects more background bleed.
+let _noiseFloor = 0.05;
+
+function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // 6 bands tuned to the phonetic landmarks we care about.
   //   V  = voicing fundamental (vocal-fold pitch)
   //   L  = first nasal/vowel formant
@@ -57,7 +63,19 @@ function letterStrength(freqData, sampleRate, fftSize, letter) {
   const H  = bandEnergy(freqData, sampleRate, fftSize, 4000, 7000);
   const VH = bandEnergy(freqData, sampleRate, fftSize, 7000, 12000);
   const total = V + L + LM + M + H + VH;
-  if (total < 0.12) return 0; // silence floor
+
+  // Adaptive noise tracking: when the current sample sits in the "probably
+  // noise" zone (less than ~1.8x the current floor), drift the floor toward
+  // it slowly. Voice spikes are well above this and don't corrupt the
+  // estimate. Slow alpha → ~3 seconds to settle on a new ambient level.
+  if (total < _noiseFloor * 1.8) {
+    _noiseFloor = _noiseFloor * 0.995 + total * 0.005;
+  }
+  // Effective silence floor: at least an absolute minimum (so a dead-silent
+  // room doesn't drift the gate to ~0 and let mic self-noise through), or
+  // gateMult× the learned floor — whichever is higher.
+  const floor = Math.max(0.08, _noiseFloor * gateMult);
+  if (total < floor) return 0;
 
   // Normalized fractions — these are the *shape* of the spectrum,
   // independent of how loud the sound is.
@@ -67,6 +85,16 @@ function letterStrength(freqData, sampleRate, fftSize, letter) {
   const fM  = M / total;
   const fH  = H / total;
   const fVH = VH / total;
+
+  // Spectral concentration gate. Broadband noise (fans, AC, hiss) spreads
+  // energy roughly evenly — each band lands near 1/6 = 0.167 of the total.
+  // Voice always has at least one band well above the average. Per-letter
+  // thresholds because nasals (m, n) naturally have flatter low-frequency
+  // distributions than fricatives — using a single 0.20 floor would gate
+  // out perfectly good n's whose energy spreads across V/L/LM evenly.
+  const concentrationMin = { m: 0.16, n: 0.15 }[letter] ?? 0.20;
+  const maxFrac = Math.max(fV, fL, fLM, fM, fH, fVH);
+  if (maxFrac < concentrationMin) return 0;
 
   // Spectral templates: target fraction per band for each letter.
   // Tuned empirically — the *contrast* between similar letters (s vs sh,
@@ -100,22 +128,38 @@ function letterStrength(freqData, sampleRate, fftSize, letter) {
   // never affects the other.
   const mGate         = clamp(1 - Math.max(0, fLM - 0.14) * 6, 0, 1);
   const mVoicedGate   = clamp((fV - 0.02) * 8.0, 0, 1);
-  // Even stricter shape gate for m: room hum and quiet breath occasionally
-  // cleared the previous 0.45 threshold. 0.55 means the V+L bands need to
-  // dominate over half the total spectrum — only an actual "mmm" hits that.
-  const mNasalShape   = clamp(((fV + fL) - 0.55) * 4.0, 0, 1);
-  // n's F2 sits anywhere from 1.5–2 kHz; broaden the floor and soften the
-  // slope further so a quieter "nnn" doesn't get gated to 0.
-  const nGate         = clamp((fLM - 0.06) * 4.0, 0, 1);
+  // Relaxed nasal-shape gate for m: the old 0.55 threshold was tuned to
+  // fight noise/breath false positives, but the new adaptive noise floor
+  // + spectral concentration gate handle that upstream now. 0.40 lets a
+  // typical mid-volume "mmm" fully pass without needing dominant V+L.
+  const mNasalShape   = clamp(((fV + fL) - 0.40) * 4.0, 0, 1);
+  // n's F2 sits anywhere from 1.5–2 kHz, and on many mics/speakers the LM
+  // fraction lands closer to 0.10–0.15 than the template's 0.25. Steeper
+  // slope + lower floor so even a typical real-world "nnn" fully opens
+  // the gate, while a flat M (fLM ≈ 0.08) still only partially passes.
+  const nGate         = clamp((fLM - 0.04) * 9.0, 0, 1);
   const nVoicedGate   = clamp((fV - 0.02) * 8.0, 0, 1);
-  const nNasalShape   = clamp(((fV + fL) - 0.25) * 4.0, 0, 1);
+  // Relaxed nasal-shape gate: real-world n's vary in how much V vs L energy
+  // they carry depending on pitch and openness. Lower threshold (0.18 vs
+  // 0.25) so a clear "nnn" with quieter low-band energy still passes the
+  // shape filter at full strength.
+  const nNasalShape   = clamp(((fV + fL) - 0.18) * 4.0, 0, 1);
   // Coarse shape: separates nasals from fricatives. Loose threshold so v
   // (the quietest voiced fricative) still passes.
   const fricShape     = clamp(((fM + fH + fVH) - 0.15) * 4.0, 0, 1);
 
   const dist = Math.abs(fV - t.V) + Math.abs(fL - t.L) + Math.abs(fLM - t.LM)
              + Math.abs(fM - t.M) + Math.abs(fH - t.H) + Math.abs(fVH - t.VH);
-  const match = Math.max(0, 1 - dist / 1.2);
+  // Per-letter match tolerance. Higher = more forgiving template (steadier
+  // score on phonemes whose spectrum jitters frame-to-frame). Default 1.2.
+  //   f: broad turbulent fricative, bands jitter heavily → 1.6
+  //   n: F2 wanders 1.5–2 kHz across speakers/positions, alveolar contact
+  //      varies → 1.6 to keep the score stable
+  const matchTolByLetter = {
+    s: 1.2, z: 1.2, sh: 1.2, f: 1.6, v: 1.2, m: 1.7, n: 1.9,
+  };
+  const matchTol = matchTolByLetter[letter] ?? 1.2;
+  const match = Math.max(0, 1 - dist / matchTol);
   const matchSq = match * match;
 
   // Generic energy used for all letters so the "loudness-to-output" curve
@@ -124,7 +168,7 @@ function letterStrength(freqData, sampleRate, fftSize, letter) {
   // strengths instead of one being twice the other.
   const totalE = H + VH * 1.2 + M * 0.9 + L * 0.7 + V * 0.7 + LM * 0.6;
   const scaleByLetter = {
-    s: 2.4, z: 1.5, sh: 2.6, f: 4.9, v: 5.5, m: 1.7, n: 6.0,
+    s: 2.4, z: 1.5, sh: 2.6, f: 4.9, v: 5.5, m: 1.7, n: 7.5,
   };
   const gateByLetter = {
     s:  voicelessGate * fricShape,
@@ -157,25 +201,95 @@ function glyphFor(letter, lang) {
   return (LETTER_GLYPHS[lang] || LETTER_GLYPHS.en)[letter] || letter;
 }
 
+// Feature detection — `navigator.mediaDevices` is only defined in secure
+// contexts (https / localhost). On plain http from a LAN IP it's undefined,
+// which is what triggers the cryptic "undefined is not an object" error.
+// `getDisplayMedia` is missing on iOS Safari entirely and on most mobile
+// browsers, so we use it to hide the screen-record UI on those platforms.
+const HAS_MEDIA_DEVICES = typeof navigator !== 'undefined'
+  && !!navigator.mediaDevices?.getUserMedia;
+const HAS_SCREEN_RECORDING = typeof navigator !== 'undefined'
+  && !!navigator.mediaDevices?.getDisplayMedia
+  && typeof MediaRecorder !== 'undefined';
+
+// Letter pool by language. v has no native Arabic letter (loanwords write
+// it as ف), so we exclude it from Arabic selection entirely. English mode
+// still offers all seven.
+const ALL_LETTERS = ['s', 'z', 'sh', 'f', 'v', 'm', 'n'];
+function lettersFor(lang) {
+  return lang === 'ar' ? ALL_LETTERS.filter((l) => l !== 'v') : ALL_LETTERS;
+}
+
+// ── per-letter "Did you know..." facts ─────────────────────────────────────
+// Shown on the game-over card. Each phoneme group shares one short fact
+// (M/N → mask resonance; Z/V → coordination; S/SH/F → breath control).
+const LETTER_FACTS = {
+  en: {
+    m: "M and N vibrate in your face — your lips, nose, and cheekbones. That's mask resonance, the secret behind voices that 'carry' across a room. Weak voices are stuck in the throat; these letters push sound forward where it gets natural amplification.",
+    n: "M and N vibrate in your face — your lips, nose, and cheekbones. That's mask resonance, the secret behind voices that 'carry' across a room. Weak voices are stuck in the throat; these letters push sound forward where it gets natural amplification.",
+    z: "Z and V are a coordination test — vocal-cord vibration meeting restricted airflow. A steady 'zzz' for 15 seconds without wobbling means your breath and cords are in sync. If it shakes or fades, your support is leaking. A diagnostic disguised as an exercise.",
+    v: "Z and V are a coordination test — vocal-cord vibration meeting restricted airflow. A steady 'vvv' for 15 seconds without wobbling means your breath and cords are in sync. If it shakes or fades, your support is leaking. A diagnostic disguised as an exercise.",
+    s: "S, SH, and F have no voice — pure air. A clean, steady 'sssss' with no fluctuation means your diaphragm is managing pressure properly. Same skill that lets you finish long sentences without trailing off mid-thought.",
+    sh: "S, SH, and F have no voice — pure air. A clean, steady 'shhhh' with no fluctuation means your diaphragm is managing pressure properly. Same skill that lets you finish long sentences without trailing off mid-thought.",
+    f: "S, SH, and F have no voice — pure air. A clean, steady 'ffff' with no fluctuation means your diaphragm is managing pressure properly. Same skill that lets you finish long sentences without trailing off mid-thought.",
+  },
+  ar: {
+    m: "أنّ حرفا «م» و«ن» يهتزّان في وجهك، لا في حلقك؟ أطِل صوت «ممم» وستشعر بشفتيك وأنفك وعظام وجنتيك تهتزّ. هذا ما يُسمّى الرنين في القناع الصوتي — وهو السرّ خلف كل صوت غنيّ يصل إلى آخر القاعة. معظم الأصوات الضعيفة تبقى حبيسة الحلق. أمّا هذه الحروف فتدفع الصوت إلى الأمام، حيث يحصل على تضخيم طبيعي.",
+    n: "أنّ حرفا «م» و«ن» يهتزّان في وجهك، لا في حلقك؟ أطِل صوت «ننن» وستشعر بشفتيك وأنفك وعظام وجنتيك تهتزّ. هذا ما يُسمّى الرنين في القناع الصوتي — وهو السرّ خلف كل صوت غنيّ يصل إلى آخر القاعة. معظم الأصوات الضعيفة تبقى حبيسة الحلق. أمّا هذه الحروف فتدفع الصوت إلى الأمام، حيث يحصل على تضخيم طبيعي.",
+    z: "أنّ حرف «ز» هو اختبار تناسق؟ فهو يجمع بين اهتزاز الحبال الصوتية وتدفّق الهواء المُقيَّد في آنٍ واحد. إذا استطعت إطالة صوت «ززز» لمدّة خمس عشرة ثانية دون اهتزاز، فهذا يعني أنّ نَفَسك وحبالك الصوتية تعملان كفريق واحد. أمّا إذا ارتجف الصوت أو خفت، فإنّ دعمك التنفّسي يتسرّب. إنه تشخيصٌ مُتَنَكِّر في هيئة تمرين.",
+    v: "حرفا «ز» و«ف» اختبار تنسيق — اهتزاز الحبال الصوتية مع تيار هواء مقيَّد. ثبات «فــ» لمدة 15 ثانية دون اهتزاز يعني أن نَفَسك وحبالك الصوتية يعملان كفريق. أيُّ ارتجاف أو خفوت يعني أن الدعم يتسرَّب. تشخيص متخفٍّ في صورة تمرين.",
+    s: "أنّ حروف «س» و«ش» و«ف» لا تحمل صوتاً إطلاقاً — مجرّد هواء؟ وهذا يجعلها تدريباً صافياً للتحكّم بالنَّفَس. إنّ صوت «ســـــ» نقيّاً وثابتاً دون تذبذب يعني أنّ حجابك الحاجز يُدير الضغط بشكل صحيح. وهذه هي المهارة نفسها التي تُمكّنك من إنهاء الجمل الطويلة دون أن يخفت صوتك.",
+    sh: "أنّ حروف «س» و«ش» و«ف» لا تحمل صوتاً إطلاقاً — مجرّد هواء؟ وهذا يجعلها تدريباً صافياً للتحكّم بالنَّفَس. إنّ صوت «شــــ» نقيّاً وثابتاً دون تذبذب يعني أنّ حجابك الحاجز يُدير الضغط بشكل صحيح. وهذه هي المهارة نفسها التي تُمكّنك من إنهاء الجمل الطويلة دون أن يخفت صوتك.",
+    f: "أنّ حروف «س» و«ش» و«ف» لا تحمل صوتاً إطلاقاً — مجرّد هواء؟ وهذا يجعلها تدريباً صافياً للتحكّم بالنَّفَس. إنّ صوت «فــــ» نقيّاً وثابتاً دون تذبذب يعني أنّ حجابك الحاجز يُدير الضغط بشكل صحيح. وهذه هي المهارة نفسها التي تُمكّنك من إنهاء الجمل الطويلة دون أن يخفت صوتك.",
+  },
+};
+function factFor(letter, lang) {
+  return (LETTER_FACTS[lang] || LETTER_FACTS.en)[letter] || LETTER_FACTS.en[letter] || '';
+}
+
 // ── permission gate ─────────────────────────────────────────────────────────
-function PermissionCard({ onStart, error, requesting, letter, language }) {
+function PermissionCard({ onStart, onStartAndRecord, onLanguageChange, error, requesting, letter, language }) {
   const glyph = glyphFor(letter, language);
   const isAr = language === 'ar';
   const T = isAr ? {
     title: 'الطائر الطنّان',
     body1: 'الحرف الحالي: ',
-    cta: 'السماح بالكاميرا والمايك',
+    cta: 'تشغيل',
+    ctaRecord: 'تشغيل وتسجيل',
     requesting: 'جاري طلب الكاميرا والمايك…',
     privacy: 'الفيديو والصوت يبقيان على جهازك — لا يتم رفع شيء.',
+    howtoTitle: 'كيفية اللعب',
+    steps: [
+      'أصدر صوت الحرف لرفع الطائر',
+      'خفّض الصوت أو توقّف ليهبط',
+      'وجّه الطائر بين الأنابيب!',
+    ],
   } : {
     title: 'Humming Bird',
     body1: 'Your letter: ',
-    cta: 'Allow camera & mic',
+    cta: 'Play',
+    ctaRecord: 'Play & Record',
     requesting: 'Requesting camera & mic…',
     privacy: 'Video and audio stay on your device — nothing is uploaded.',
+    howtoTitle: 'How to play',
+    steps: [
+      "Hold the letter's sound to lift the bird",
+      'Stop or soften the sound to let it drop',
+      'Steer between the pipes!',
+    ],
   };
   return (
     <div className="center-card" dir={isAr ? 'rtl' : 'ltr'}>
+      <div className="lang-switch" dir="ltr">
+        <button type="button"
+                className={'lang-btn' + (!isAr ? ' on' : '')}
+                onClick={() => onLanguageChange?.('en')}
+                aria-pressed={!isAr}>EN</button>
+        <button type="button"
+                className={'lang-btn' + (isAr ? ' on' : '')}
+                onClick={() => onLanguageChange?.('ar')}
+                aria-pressed={isAr}>AR</button>
+      </div>
       <h1>{T.title}</h1>
       <p className="howto__letter-row">
         {T.body1}
@@ -183,10 +297,32 @@ function PermissionCard({ onStart, error, requesting, letter, language }) {
           <span className={isAr ? 'ar-glyph' : ''}>{glyph}</span>
         </span>
       </p>
+      <div className="howto">
+        <div className="howto__title">{T.howtoTitle}</div>
+        <ol className="howto__steps">
+          {T.steps.map((s, i) => <li key={i}>{s}</li>)}
+        </ol>
+      </div>
       <div className="row">
-        <button className="btn primary" onClick={onStart} disabled={requesting}>
-          {requesting ? T.requesting : T.cta}
-        </button>
+        <div className="btn-col">
+          <button className="btn primary btn--icon" onClick={onStart}
+                  disabled={requesting} title={T.cta} aria-label={T.cta}>
+            <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true">
+              <path d="M7 4.5v15l13-7.5z" fill="currentColor" />
+            </svg>
+          </button>
+          <span className="btn-col__lbl">{T.cta}</span>
+        </div>
+        <div className="btn-col">
+          <button className="btn ghost btn--icon" onClick={onStartAndRecord}
+                  disabled={requesting} title={T.ctaRecord} aria-label={T.ctaRecord}>
+            <svg viewBox="0 0 28 24" width="30" height="26" aria-hidden="true">
+              <path d="M5 4.5v15l13-7.5z" fill="currentColor" />
+              <circle cx="23" cy="6" r="4" fill="#fe2c55" />
+            </svg>
+          </button>
+          <span className="btn-col__lbl">{T.ctaRecord}</span>
+        </div>
       </div>
       {error && <div className="error">⚠ {error}</div>}
       <div className="priv">
@@ -235,11 +371,20 @@ function App() {
   // different prompt. Runs in an effect (not at render) so the tweak
   // store and host-postMessage pipeline are ready.
   useEffect(() => {
-    const choices = ['s', 'z', 'sh', 'f', 'v', 'm', 'n'];
+    const choices = lettersFor(t.language);
     const pick = choices[Math.floor(Math.random() * choices.length)];
     setTweak('letter', pick);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // If the language changes (or starts) as Arabic while 'v' is the active
+  // letter, swap to 'f' — v isn't a real Arabic letter and shouldn't appear
+  // in the Arabic letter pool.
+  useEffect(() => {
+    if (t.language === 'ar' && t.letter === 'v') {
+      setTweak('letter', 'f');
+    }
+  }, [t.language, t.letter]);
   const [phase, setPhase] = useState('intro');
   const [requesting, setRequesting] = useState(false);
   const [error, setError] = useState(null);
@@ -254,14 +399,18 @@ function App() {
   // "Don't let your bird fall" hint right after the first pipe arrives.
   // Holds the timestamp when runway ended; null otherwise.
   const [fallHintAt, setShowFallHint] = useState(null);
-  const prevRunwayActiveRef = useRef(true);
-  useEffect(() => {
-    if (prevRunwayActiveRef.current && !runway.active) {
-      // Just ended.
+  // Visual-only "Say [letter]" intro banner. Independent of calibration
+  // / runway — purely a text cue at the start of each round. When it
+  // hides, the "Don't let your bird fall" hint flashes after.
+  const [showSayBanner, setShowSayBanner] = useState(false);
+  const playIntroBanners = useCallback(() => {
+    setShowSayBanner(true);
+    setShowFallHint(null);
+    setTimeout(() => {
+      setShowSayBanner(false);
       setShowFallHint(performance.now());
-    }
-    prevRunwayActiveRef.current = runway.active;
-  }, [runway.active]);
+    }, 1500);
+  }, []);
   useEffect(() => {
     if (fallHintAt == null) return undefined;
     const id = setTimeout(() => setShowFallHint(null), 2200);
@@ -274,6 +423,11 @@ function App() {
   const audioRef = useRef(null);
   const rafRef = useRef(0);
   const offCanvasRef = useRef(null);
+  // Refs that mirror React state — needed because the composite-recording
+  // render loop runs outside React and reads these values every frame.
+  const statsRef = useRef({ score: 0, gameOver: false });
+  const showSayBannerRef = useRef(false);
+  const fallHintAtRef = useRef(null);
 
   const gameRef = useRef({
     smoothed: 0,
@@ -292,12 +446,8 @@ function App() {
     bestStreak: 0,
     gameOver: false,
     initialized: false,
-    // Inline calibration runway: when active, no pipes spawn and we keep
-    // sampling the user's letterStrength. Calibration ends when calRemaining
-    // hits 0, the median sample becomes targetStrength, and the first pipe
-    // arrives a moment later.
-    calibrating: true,
-    calRemaining: 5,
+    calibrating: false,
+    calRemaining: 0,
     calSamples: [],
   });
 
@@ -309,11 +459,23 @@ function App() {
 
   const tRef = useRef(t);
   tRef.current = t;
+  statsRef.current = stats;
+  showSayBannerRef.current = showSayBanner;
+  fallHintAtRef.current = fallHintAt;
 
   // ── start: request permissions ───────────────────────────────────────────
   const start = useCallback(async () => {
     setRequesting(true);
     setError(null);
+    if (!HAS_MEDIA_DEVICES) {
+      // Most common cause on phones: page loaded over plain http://<lan-ip>.
+      // navigator.mediaDevices is only exposed in secure contexts.
+      setRequesting(false);
+      setError(tRef.current?.language === 'ar'
+        ? 'يتطلب الوصول للكاميرا والميكروفون اتصالاً آمناً. افتح هذه الصفحة عبر https://'
+        : 'Camera & mic access requires HTTPS. Open this page over https:// instead of http://.');
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: 'user' },
@@ -326,6 +488,12 @@ function App() {
 
       const AC = window.AudioContext || window.webkitAudioContext;
       const ctx = new AC();
+      // iOS Safari starts AudioContext in 'suspended' state even when created
+      // from a user gesture; explicitly resume so the analyser runs. Awaited
+      // so the rest of the setup doesn't race against a still-suspended ctx.
+      if (ctx.state === 'suspended') {
+        await ctx.resume().catch(() => {});
+      }
       const src = ctx.createMediaStreamSource(stream);
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 2048;
@@ -339,18 +507,17 @@ function App() {
         freqData: new Uint8Array(analyser.frequencyBinCount),
       };
       setRequesting(false);
-      // Skip the standalone calibration phase — calibration now runs inside
-      // the game itself for the first few seconds ("runway").
       const g = gameRef.current;
-      g.calibrating = true;
-      g.calRemaining = 0.2;
+      g.calibrating = false;
+      g.calRemaining = 0;
       g.calSamples = [];
       setPhase('playing');
+      playIntroBanners();
     } catch (e) {
       setRequesting(false);
       setError(e.message || 'Permission denied.');
     }
-  }, []);
+  }, [playIntroBanners]);
 
   // ── game loop ────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -400,6 +567,7 @@ function App() {
         a.analyser.getByteFrequencyData(a.freqData);
         g.strengthRaw = letterStrength(
           a.freqData, a.sampleRate, a.analyser.fftSize, tw.letter,
+          tw.noiseGate,
         );
         const sm = clamp(tw.smoothing / 100, 0, 0.97);
         g.smoothed = g.smoothed * sm + g.strengthRaw * (1 - sm);
@@ -418,7 +586,7 @@ function App() {
           const upper = sorted.slice(Math.floor(sorted.length / 2));
           const median = upper[Math.floor(upper.length / 2)] || 0.1;
           const captured = Math.max(8, Math.round(median * 100));
-          setTweak('targetStrength', captured);
+          setTweak('targetStrengthByLetter', { ...(tw.targetStrengthByLetter ?? {}), [tw.letter]: captured });
           g.calibrating = false;
           g.calSamples = [];
           g.spawnTimer = 0;
@@ -449,7 +617,7 @@ function App() {
       const centerY = (skyTop + skyBot) / 2;
       const birdR = 6;
 
-      const target = Math.max(0.02, tw.targetStrength / 100);
+      const target = Math.max(0.02, (tw.targetStrengthByLetter?.[tw.letter] ?? 26) / 100);
       const ratio = Math.max(0, g.smoothed / target);
       const above = Math.max(0, ratio - 1);
       const below = Math.max(0, 1 - ratio);
@@ -496,7 +664,29 @@ function App() {
       // over so the world freezes mid-crash.
       if (!g.calibrating && !g.gameOver) {
         g.spawnTimer += dt;
-        if (g.spawnTimer >= spawnInterval || g.cols.length === 0) {
+        // At game start, pre-populate the pipe queue from close-to-bird
+        // outward at proper spacing, so the player gets a continuous stream
+        // right away instead of watching empty sky scroll past. After this,
+        // the normal spawn cadence at offW + 30 takes over and columnSpacing
+        // controls cadence.
+        if (g.cols.length === 0) {
+          g.spawnTimer = 0;
+          // Walk backward from the natural spawn position so the rightmost
+          // pre-populated pipe lands exactly at offW + 30 — that way the
+          // first natural spawn (spawnInterval seconds later) is exactly
+          // spacingPx away from it, no gap discontinuity.
+          for (let x = offW + 30; x >= offW * 0.55; x -= spacingPx) {
+            const wobble = Math.sin((performance.now() + x * 10) * 0.0008) * 0.05;
+            const gapCenter = (skyBot - skyTop) * (0.5 + wobble) + skyTop;
+            g.cols.push({
+              x,
+              gapY: gapCenter,
+              gapH: (tw.gapSize / 100) * (skyBot - skyTop),
+              scored: false,
+              hit: false,
+            });
+          }
+        } else if (g.spawnTimer >= spawnInterval) {
           g.spawnTimer = 0;
           const wobble = Math.sin(performance.now() * 0.0008) * 0.05;
           const gapCenter = (skyBot - skyTop) * (0.5 + wobble) + skyTop;
@@ -605,56 +795,393 @@ function App() {
   // webcam, game canvas and HUD exactly as the user sees them. Browser
   // shows its own "select what to share" picker; user chooses tab/window.
   const [isRecording, setIsRecording] = useState(false);
+  // Holds the finished recording when auto-stop fires (game-over). Auto-stop
+  // happens after the user's original click gesture has expired, so
+  // navigator.share() would be rejected. We surface a "Save recording"
+  // button instead, and the user's tap on that button is a fresh gesture
+  // that lets navigator.share() succeed (Save to Photos on iOS).
+  const [pendingRecording, setPendingRecording] = useState(null);
+
+  const savePendingRecording = useCallback(async () => {
+    const pr = pendingRecording;
+    if (!pr) return;
+    setPendingRecording(null);
+    if (navigator.canShare && navigator.canShare({ files: [pr.file] })) {
+      try {
+        await navigator.share({ files: [pr.file], title: 'Humming Bird recording' });
+        return;
+      } catch (_) { /* user cancelled — fall through to download */ }
+    }
+    const url = URL.createObjectURL(pr.blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = pr.filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }, [pendingRecording]);
   const recorderRef = useRef(null);
   const recChunksRef = useRef([]);
   const recStreamRef = useRef(null);
 
-  const toggleRecording = useCallback(async () => {
+  // Phone-friendly recording path. iOS Safari (and most mobile browsers)
+  // don't expose getDisplayMedia, so we build an offscreen canvas the size
+  // of the viewport, redraw the webcam + game canvas + key HUD overlays
+  // into it every frame, and captureStream from that. Returns an object
+  // { stream, stop } — caller must call stop() when recording ends to
+  // cancel the rAF loop and release the offscreen canvas.
+  const startCompositeCapture = useCallback(() => {
+    const composite = document.createElement('canvas');
+    if (typeof composite.captureStream !== 'function') return null;
+    const W = composite.width = window.innerWidth;
+    const H = composite.height = window.innerHeight;
+    composite.style.cssText = 'position:fixed;left:-99999px;top:0;pointer-events:none;';
+    document.body.appendChild(composite);
+    const cctx = composite.getContext('2d');
+    let raf = 0;
+    let cancelled = false;
+
+    const drawFrame = () => {
+      if (cancelled) return;
+      cctx.clearRect(0, 0, W, H);
+
+      // 1. Webcam background (mirrored to match the on-screen scaleX(-1),
+      //    cover-fit so the whole canvas is filled).
+      const v = videoRef.current;
+      if (v && v.videoWidth > 0) {
+        const vAR = v.videoWidth / v.videoHeight;
+        const cAR = W / H;
+        let dw, dh, dx, dy;
+        if (vAR > cAR) { dh = H; dw = dh * vAR; dx = (W - dw) / 2; dy = 0; }
+        else { dw = W; dh = dw / vAR; dx = 0; dy = (H - dh) / 2; }
+        cctx.save();
+        cctx.scale(-1, 1);
+        cctx.translate(-W, 0);
+        cctx.drawImage(v, dx, dy, dw, dh);
+        cctx.restore();
+      } else {
+        cctx.fillStyle = '#05060a';
+        cctx.fillRect(0, 0, W, H);
+      }
+
+      // 2. Vignette — soft top/bottom fade matching .vignette on screen.
+      const grad = cctx.createLinearGradient(0, 0, 0, H);
+      grad.addColorStop(0, 'rgba(0,0,0,.35)');
+      grad.addColorStop(0.18, 'rgba(0,0,0,0)');
+      grad.addColorStop(0.6, 'rgba(0,0,0,0)');
+      grad.addColorStop(1, 'rgba(7,9,11,.55)');
+      cctx.fillStyle = grad;
+      cctx.fillRect(0, 0, W, H);
+
+      // 3. Game canvas, positioned to match where it sits on screen.
+      const gc = canvasRef.current;
+      if (gc) {
+        const r = gc.getBoundingClientRect();
+        if (r.width > 0 && r.height > 0) {
+          cctx.drawImage(gc, r.left, r.top, r.width, r.height);
+        }
+      }
+
+      // 4. HUD overlays — recreated with canvas commands.
+      const tw = tRef.current;
+      const st = statsRef.current;
+      const isAr = tw?.language === 'ar';
+      const letter = tw?.letter || '?';
+      const glyph = isAr
+        ? (LETTER_GLYPHS.ar[letter] || letter)
+        : (LETTER_GLYPHS.en[letter] || letter);
+
+      const stroke = (text, x, y, lineW) => {
+        cctx.lineWidth = lineW;
+        cctx.strokeStyle = '#000';
+        cctx.strokeText(text, x, y);
+        cctx.fillText(text, x, y);
+      };
+
+      // Hide the score panel while the "Say [letter]" intro banner is up
+      // so the banner has clear space and isn't cut by the panel. Score is
+      // 0 at game start anyway.
+      if (!st.gameOver && !showSayBannerRef.current) {
+        // Big-score panel — matches the live .big-score (right side, biased
+        // up). Animated coin scales horizontally to mimic the CSS coinSpin
+        // (transform: scaleX(0.18 → 1)).
+        const coinR = 22;
+        const cx = W - 60;
+        const cy = H * 0.18;
+        // Coin shimmer / spin: scaleX in [0.18, 1] on a 2.4s cycle.
+        const phase = (performance.now() % 2400) / 2400;
+        const scaleX = 0.18 + 0.82 * Math.abs(Math.sin(phase * Math.PI));
+        cctx.save();
+        cctx.translate(cx, cy);
+        cctx.scale(scaleX, 1);
+        // Coin body with radial gradient (highlight top-left)
+        const coinGrad = cctx.createRadialGradient(-coinR * 0.3, -coinR * 0.4, 1,
+          0, 0, coinR);
+        coinGrad.addColorStop(0, '#fff8c2');
+        coinGrad.addColorStop(0.4, '#ffe43e');
+        coinGrad.addColorStop(1, '#c89200');
+        cctx.fillStyle = coinGrad;
+        cctx.beginPath();
+        cctx.arc(0, 0, coinR, 0, Math.PI * 2);
+        cctx.fill();
+        // Coin outline (black ring)
+        cctx.lineWidth = 3;
+        cctx.strokeStyle = '#000';
+        cctx.stroke();
+        // Star inside
+        cctx.fillStyle = '#5b3c00';
+        cctx.font = 'bold 22px Inter, system-ui, sans-serif';
+        cctx.textAlign = 'center';
+        cctx.textBaseline = 'middle';
+        cctx.fillText('★', 0, 1);
+        cctx.restore();
+        // "SCORE" pill — pink/orange gradient
+        const pillW = 64;
+        const pillH = 20;
+        const pillY = cy + coinR + 8;
+        const pillX = cx - pillW / 2;
+        const pillGrad = cctx.createLinearGradient(pillX, pillY, pillX + pillW, pillY + pillH);
+        pillGrad.addColorStop(0, '#fe2c55');
+        pillGrad.addColorStop(1, '#ff8e3d');
+        cctx.fillStyle = pillGrad;
+        cctx.beginPath();
+        cctx.arc(pillX + pillH / 2, pillY + pillH / 2, pillH / 2, Math.PI / 2, -Math.PI / 2);
+        cctx.lineTo(pillX + pillW - pillH / 2, pillY);
+        cctx.arc(pillX + pillW - pillH / 2, pillY + pillH / 2, pillH / 2, -Math.PI / 2, Math.PI / 2);
+        cctx.closePath();
+        cctx.fill();
+        cctx.fillStyle = '#fff';
+        cctx.font = 'bold 11px Inter, system-ui, sans-serif';
+        cctx.textAlign = 'center';
+        cctx.textBaseline = 'middle';
+        cctx.fillText(isAr ? 'النقاط' : 'SCORE', cx, pillY + pillH / 2);
+        // Big yellow score number with black outline
+        cctx.font = 'bold 64px Inter, system-ui, sans-serif';
+        cctx.fillStyle = '#ffe43e';
+        cctx.textBaseline = 'top';
+        const scoreY = pillY + pillH + 8;
+        stroke(String(st.score), cx, scoreY, 6);
+        // "×N combo" pill — matches .big-score__combo (cyan-ringed dark
+        // chip). Only shows when streak > 1, same as the live UI.
+        if (st.streak > 1) {
+          const comboText = `×${st.streak} ${isAr ? 'متتالية' : 'combo'}`;
+          cctx.font = 'bold 11px Inter, system-ui, sans-serif';
+          const tw = cctx.measureText(comboText).width;
+          const cbW = tw + 22;
+          const cbH = 22;
+          const cbY = scoreY + 72;
+          const cbX = cx - cbW / 2;
+          // Black-translucent rounded chip with cyan outline
+          cctx.fillStyle = 'rgba(0,0,0,0.55)';
+          cctx.beginPath();
+          cctx.arc(cbX + cbH / 2, cbY + cbH / 2, cbH / 2, Math.PI / 2, -Math.PI / 2);
+          cctx.lineTo(cbX + cbW - cbH / 2, cbY);
+          cctx.arc(cbX + cbW - cbH / 2, cbY + cbH / 2, cbH / 2, -Math.PI / 2, Math.PI / 2);
+          cctx.closePath();
+          cctx.fill();
+          cctx.lineWidth = 1.5;
+          cctx.strokeStyle = '#25f4ee';
+          cctx.stroke();
+          // Cyan text
+          cctx.fillStyle = '#25f4ee';
+          cctx.textAlign = 'center';
+          cctx.textBaseline = 'middle';
+          cctx.fillText(comboText, cx, cbY + cbH / 2);
+        }
+      }
+
+      // "Say [letter]" big banner (intro).
+      if (showSayBannerRef.current) {
+        cctx.font = `bold ${Math.min(96, W * 0.16)}px Inter, system-ui, sans-serif`;
+        cctx.textAlign = 'center';
+        cctx.textBaseline = 'middle';
+        const text = isAr ? `قل «${glyph}»` : `Say "${glyph}"`;
+        cctx.fillStyle = '#fff';
+        stroke(text, W / 2, H * 0.36, 10);
+      } else if (fallHintAtRef.current != null) {
+        // Two-line wrap so the hint doesn't crowd the score panel on
+        // narrow phone screens.
+        const fontSize = Math.min(48, W * 0.08);
+        cctx.font = `bold ${fontSize}px Inter, system-ui, sans-serif`;
+        cctx.textAlign = 'center';
+        cctx.textBaseline = 'middle';
+        const lines = isAr
+          ? ['لا تدع', 'طائرك يسقط']
+          : ["Don't let", 'your bird fall'];
+        cctx.fillStyle = '#fff';
+        const lineH = fontSize * 1.1;
+        const baseY = H * 0.36;
+        lines.forEach((line, i) => {
+          stroke(line, W / 2, baseY + (i - (lines.length - 1) / 2) * lineH, 8);
+        });
+      }
+
+      // Game-over overlay — dim + GAME OVER + big score.
+      if (st.gameOver) {
+        cctx.fillStyle = 'rgba(0,0,0,.45)';
+        cctx.fillRect(0, 0, W, H);
+        cctx.textAlign = 'center';
+        cctx.textBaseline = 'middle';
+        cctx.fillStyle = '#fe2c55';
+        cctx.font = 'bold 36px Inter, system-ui, sans-serif';
+        stroke(isAr ? 'انتهت اللعبة' : 'GAME OVER', W / 2, H * 0.38, 6);
+        cctx.fillStyle = '#fff';
+        cctx.font = `bold ${Math.min(160, W * 0.28)}px Inter, system-ui, sans-serif`;
+        stroke(String(st.score), W / 2, H * 0.5, 8);
+      }
+
+      raf = requestAnimationFrame(drawFrame);
+    };
+    raf = requestAnimationFrame(drawFrame);
+
+    const stream = composite.captureStream(30);
+    const stop = () => {
+      cancelled = true;
+      cancelAnimationFrame(raf);
+      if (composite.parentNode) composite.parentNode.removeChild(composite);
+    };
+    return { stream, stop };
+  }, []);
+
+  const toggleRecording = useCallback(async (preCapturedScreen) => {
     if (recorderRef.current && recorderRef.current.state !== 'inactive') {
       recorderRef.current.stop();
       return;
     }
+    if (typeof MediaRecorder === 'undefined') {
+      alert('Recording is not supported in this browser.');
+      return;
+    }
+    // Three paths to a video track:
+    //   1. preCapturedScreen — Play & Record desktop flow already captured
+    //      the screen while user-gesture was fresh.
+    //   2. getDisplayMedia — desktop HUD button, opens the share picker.
+    //   3. canvas.captureStream — phone fallback (iOS Safari and most mobile
+    //      browsers don't expose getDisplayMedia at all). Records just the
+    //      game canvas, not the webcam background or HTML HUD.
+    let videoStream = preCapturedScreen;
+    let isCanvasCapture = false;
+    let compositeStop = null;
+    if (!videoStream) {
+      if (navigator.mediaDevices?.getDisplayMedia) {
+        try {
+          videoStream = await navigator.mediaDevices.getDisplayMedia({
+            video: { frameRate: 30 },
+          });
+        } catch (e) {
+          // User dismissed picker or denied — silent.
+          setIsRecording(false);
+          return;
+        }
+      } else {
+        const canvas = canvasRef.current;
+        if (!canvas || typeof canvas.captureStream !== 'function'
+            || typeof document.createElement('canvas').captureStream !== 'function') {
+          alert('Recording is not supported in this browser.');
+          return;
+        }
+        const result = startCompositeCapture();
+        if (!result) {
+          alert('Recording is not supported in this browser.');
+          return;
+        }
+        videoStream = result.stream;
+        compositeStop = result.stop;
+        isCanvasCapture = true;
+      }
+    }
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: 30 },
-        audio: true,
-      });
-      recStreamRef.current = stream;
-      const mime = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus')
-        ? 'video/webm;codecs=vp9,opus'
-        : 'video/webm';
-      const mr = new MediaRecorder(stream, { mimeType: mime });
+      // Mix the mic stream (user's voice — the actual gameplay audio) into
+      // the recording. Lives in streamRef for the duration of the game.
+      const micTracks = streamRef.current ? streamRef.current.getAudioTracks() : [];
+      const combined = new MediaStream([
+        ...videoStream.getVideoTracks(),
+        ...micTracks,
+      ]);
+      recStreamRef.current = videoStream;
+      // Prefer MP4 (plays in QuickTime/iMovie/iOS Photos with no conversion)
+      // when supported; otherwise fall back to WebM.
+      const mimeCandidates = [
+        'video/mp4;codecs=avc1.42E01E,mp4a.40.2',
+        'video/mp4',
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8,opus',
+        'video/webm',
+      ];
+      const mime = mimeCandidates.find((m) => MediaRecorder.isTypeSupported(m)) || '';
+      const isMp4 = mime.startsWith('video/mp4');
+      const ext = isMp4 ? 'mp4' : 'webm';
+      const blobType = isMp4 ? 'video/mp4' : 'video/webm';
+      const mr = new MediaRecorder(combined, { mimeType: mime });
       recChunksRef.current = [];
       mr.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) recChunksRef.current.push(e.data);
       };
-      mr.onstop = () => {
-        const blob = new Blob(recChunksRef.current, { type: 'video/webm' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `humming-bird-${Date.now()}.webm`;
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-        stream.getTracks().forEach((tr) => tr.stop());
+      mr.onstop = async () => {
+        const blob = new Blob(recChunksRef.current, { type: blobType });
+        if (blob.size === 0) {
+          alert('Recording finished but no data was captured.');
+        } else {
+          const filename = `humming-bird-${Date.now()}.${ext}`;
+          const file = new File([blob], filename, { type: blobType });
+          // Try to share immediately. Works when the user pressed Stop in
+          // the HUD (the click gesture is still active for navigator.share).
+          // For auto-stop on game-over, the gesture has expired and share
+          // will throw — we then stash the blob in pendingRecording so the
+          // game-over "Save recording" button can trigger share from a
+          // fresh tap. Without that we'd fall back to a file download.
+          let shared = false;
+          if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            try {
+              await navigator.share({ files: [file], title: 'Humming Bird recording' });
+              shared = true;
+            } catch (_) { /* user cancelled OR gesture expired */ }
+          }
+          if (!shared) {
+            if (navigator.canShare && navigator.canShare({ files: [file] })) {
+              // Share is supported but not allowed right now — defer until
+              // the user taps the "Save recording" button.
+              setPendingRecording({ blob, file, filename, blobType });
+            } else {
+              // Desktop fallback: trigger download anchor.
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = filename;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              setTimeout(() => URL.revokeObjectURL(url), 1000);
+            }
+          }
+        }
+        // Stop the video source. For screen-share we stop the OS-level
+        // screen tracks. For composite capture we cancel the rAF loop and
+        // remove the offscreen canvas (compositeStop), then stop the
+        // captured stream's tracks.
+        if (compositeStop) compositeStop();
+        videoStream.getTracks().forEach((tr) => tr.stop());
         recStreamRef.current = null;
         setIsRecording(false);
       };
-      // If the user clicks the browser's "Stop sharing" button, the video
-      // track ends — mirror that into our state so the recorder stops.
-      stream.getVideoTracks()[0].addEventListener('ended', () => {
-        if (mr.state !== 'inactive') mr.stop();
-      });
+      // For screen capture only: if the user clicks the browser's "Stop
+      // sharing" UI, mirror that into stopping the recorder.
+      if (!isCanvasCapture) {
+        videoStream.getVideoTracks()[0].addEventListener('ended', () => {
+          if (mr.state !== 'inactive') mr.stop();
+        });
+      }
       recorderRef.current = mr;
-      mr.start();
+      mr.start(1000);
       setIsRecording(true);
     } catch (e) {
-      // User dismissed the picker or denied permission — no-op.
+      if (compositeStop) compositeStop();
+      videoStream.getTracks().forEach((tr) => tr.stop());
+      alert(`Couldn't start recording: ${e.message || e}`);
       setIsRecording(false);
     }
-  }, []);
+  }, [startCompositeCapture]);
   // Stop any in-flight recording when the tab tears down.
   useEffect(() => () => {
     if (recorderRef.current && recorderRef.current.state !== 'inactive') {
@@ -665,6 +1192,65 @@ function App() {
     }
   }, []);
 
+  // "Play & Record" path from the permission card.
+  //
+  // Critical: capture the screen FIRST, while the click's user-gesture is
+  // still fresh. Browsers (incl. Chromium-based ones) drop the gesture
+  // across an awaited getUserMedia mic prompt — so calling getDisplayMedia
+  // AFTER start() would silently reject and produce no recording. By
+  // capturing the screen up front and handing it to toggleRecording, the
+  // share picker reliably appears.
+  //
+  // Auto-stop on game-over is handled by the effect below, same as for
+  // a recording started from the HUD button.
+  const startAndRecord = useCallback(async () => {
+    let screenStream = null;
+    if (navigator.mediaDevices?.getDisplayMedia) {
+      try {
+        screenStream = await navigator.mediaDevices.getDisplayMedia({
+          video: { frameRate: 30 },
+        });
+      } catch (_) {
+        // User dismissed the share picker. Fall back to starting the game
+        // without recording — same outcome as clicking plain Play.
+        screenStream = null;
+      }
+    }
+    await start();
+    if (!streamRef.current) {
+      if (screenStream) screenStream.getTracks().forEach((tr) => tr.stop());
+      return;
+    }
+    if (screenStream) {
+      // Desktop path: hand the pre-captured screen stream to the recorder.
+      await toggleRecording(screenStream);
+    } else if (!navigator.mediaDevices?.getDisplayMedia) {
+      // Phone path: no screen-capture API. Wait for the game canvas to mount
+      // after setPhase('playing'), then start canvas-based recording.
+      for (let i = 0; i < 30 && !canvasRef.current; i++) {
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      if (canvasRef.current) {
+        await toggleRecording();
+      }
+    }
+  }, [start, toggleRecording]);
+
+  // Auto-stop any in-flight recording the moment the round ends, so the
+  // saved file is exactly one round (intro → lose). Defer slightly so the
+  // game-over UI paints into the recording's final frame.
+  useEffect(() => {
+    if (!stats.gameOver) return;
+    const mr = recorderRef.current;
+    if (!mr || mr.state === 'inactive') return;
+    const t = setTimeout(() => {
+      if (mr.state !== 'inactive') {
+        try { mr.stop(); } catch (_) { /* ignore */ }
+      }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [stats.gameOver]);
+
   const resetScore = () => {
     const g = gameRef.current;
     g.score = 0; g.hits = 0; g.streak = 0; g.bestStreak = 0; g.cols = [];
@@ -673,8 +1259,9 @@ function App() {
     g.birdVy = 0;
     g.initialized = false; // re-center bird on next frame
     // Pick a NEW random letter — distinct from the current one — so each
-    // "Play again" run challenges a different sound.
-    const choices = ['s', 'z', 'sh', 'f', 'v', 'm', 'n'];
+    // "Play again" run challenges a different sound. Arabic mode excludes
+    // 'v' (no native glyph).
+    const choices = lettersFor(tRef.current.language);
     const current = tRef.current.letter;
     let pick = current;
     while (pick === current) {
@@ -682,10 +1269,12 @@ function App() {
     }
     setTweak('letter', pick);
     setStats({ score: 0, hits: 0, streak: 0, bestStreak: 0, gameOver: false });
+    setPendingRecording(null);
+    playIntroBanners();
   };
 
   // Bar normalisation: target sits ~middle (50%) so user can see deviation.
-  const meterPct = clamp((hudStrength / Math.max(0.02, t.targetStrength / 100)) * 50, 0, 100);
+  const meterPct = clamp((hudStrength / Math.max(0.02, (t.targetStrengthByLetter?.[t.letter] ?? 26) / 100)) * 50, 0, 100);
   const targetMarker = 50;
   const sideMeterTargetPct = 100 - targetMarker;
   const sideMeterFillPct = clamp(meterPct, 0, 100);
@@ -717,14 +1306,17 @@ function App() {
 
       {/* Center cards */}
       {phase === 'intro' && (
-        <PermissionCard onStart={start} error={error} requesting={requesting}
+        <PermissionCard onStart={start} onStartAndRecord={startAndRecord}
+          onLanguageChange={(lang) => setTweak('language', lang)}
+          error={error} requesting={requesting}
           letter={t.letter} language={t.language} />
       )}
-      {phase === 'playing' && runway.active && (
+      {phase === 'playing' && showSayBanner && (
         <div className="runway-banner">
-          <div className="runway-banner__say">
+          <div className="runway-banner__say"
+               dir={t.language === 'ar' ? 'rtl' : 'ltr'}>
             {t.language === 'ar'
-              ? <>قل <b className="ar-glyph">“{glyphFor(t.letter, 'ar')}”</b></>
+              ? <span className="ar-glyph">قل <b>«{glyphFor(t.letter, 'ar')}»</b></span>
               : <>Say <b>“{glyphFor(t.letter, 'en')}”</b></>}
           </div>
         </div>
@@ -762,7 +1354,7 @@ function App() {
           browser's getDisplayMedia API and downloads a .webm when stopped. */}
       {phase === 'playing' && (
         <button className={'record-btn' + (isRecording ? ' is-on' : '')}
-                onClick={toggleRecording}
+                onClick={() => toggleRecording()}
                 title={isRecording ? 'Stop & save' : 'Record'}>
           {isRecording ? <span className="record-btn__square" /> : <span className="record-btn__dot" />}
           <span className="record-btn__lbl">
@@ -773,7 +1365,8 @@ function App() {
         </button>
       )}
       {phase === 'playing' && stats.gameOver && (
-        <div className="gameover-card">
+        <div className={'gameover-card' + (t.language === 'ar' ? ' is-rtl' : '')}
+             dir={t.language === 'ar' ? 'rtl' : 'ltr'}>
           <div className="gameover-card__label">
             {t.language === 'ar' ? 'انتهت اللعبة' : 'Game Over'}
           </div>
@@ -782,6 +1375,20 @@ function App() {
             {t.language === 'ar' ? 'أفضل سلسلة' : 'Best streak'} ·{' '}
             <b>{stats.bestStreak}</b>
           </div>
+          <div className="gameover-card__fact">
+            <div className="gameover-card__fact-label">
+              {t.language === 'ar' ? 'هل تعلم...' : 'Did you know...'}
+            </div>
+            <div className={'gameover-card__fact-text' + (t.language === 'ar' ? ' ar-glyph' : '')}>
+              {factFor(t.letter, t.language)}
+            </div>
+          </div>
+          {pendingRecording && (
+            <button className="btn ghost gameover-card__save"
+                    onClick={savePendingRecording}>
+              {t.language === 'ar' ? 'حفظ الفيديو' : 'Save recording'}
+            </button>
+          )}
           <button className="btn primary" onClick={resetScore}>
             {t.language === 'ar' ? 'العب مرة أخرى' : 'Play again'}
           </button>
@@ -836,14 +1443,17 @@ function App() {
               { value: 'v', label: 'v — voiced f' },
               { value: 'm', label: 'm — humming m' },
               { value: 'n', label: 'n — humming n' },
-            ]}
+            ].filter((o) => lettersFor(t.language).includes(o.value))}
             onChange={(v) => setTweak('letter', v)} />
-          <TweakSlider label="Target strength" value={t.targetStrength} min={2} max={80} step={1}
-            onChange={(v) => setTweak('targetStrength', v)} />
+          <TweakSlider label={`Target strength (${t.letter})`}
+            value={t.targetStrengthByLetter?.[t.letter] ?? 26} min={2} max={80} step={1}
+            onChange={(v) => setTweak('targetStrengthByLetter', { ...(t.targetStrengthByLetter ?? {}), [t.letter]: v })} />
           <TweakSlider label="Sensitivity" value={t.sensitivity} min={0.01} max={2.5} step={0.01}
             onChange={(v) => setTweak('sensitivity', v)} />
           <TweakSlider label="Smoothing" value={t.smoothing} min={0} max={95} step={1} unit="%"
             onChange={(v) => setTweak('smoothing', v)} />
+          <TweakSlider label="Noise gate" value={t.noiseGate ?? 2.5} min={1} max={5} step={0.1}
+            onChange={(v) => setTweak('noiseGate', v)} />
           <TweakButton label="Recalibrate" onClick={recalibrate} />
         </TweakSection>
         <TweakSection label="Physics">

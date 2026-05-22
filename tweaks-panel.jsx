@@ -271,6 +271,8 @@ function TweaksPanel({ title = 'Tweaks', noDeckControls = false, children }) {
     const sx = e.clientX, sy = e.clientY;
     const startRight = window.innerWidth - r.right;
     const startBottom = window.innerHeight - r.bottom;
+    // Pointer events cover both mouse and touch in one API, so the panel
+    // can be dragged on phones too.
     const move = (ev) => {
       offsetRef.current = {
         x: startRight - (ev.clientX - sx),
@@ -279,11 +281,11 @@ function TweaksPanel({ title = 'Tweaks', noDeckControls = false, children }) {
       clampToViewport();
     };
     const up = () => {
-      window.removeEventListener('mousemove', move);
-      window.removeEventListener('mouseup', up);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
     };
-    window.addEventListener('mousemove', move);
-    window.addEventListener('mouseup', up);
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
   };
 
   if (!open) return null;
@@ -292,10 +294,10 @@ function TweaksPanel({ title = 'Tweaks', noDeckControls = false, children }) {
       <style>{__TWEAKS_STYLE}</style>
       <div ref={dragRef} className="twk-panel" data-noncommentable=""
            style={{ right: offsetRef.current.x, bottom: offsetRef.current.y }}>
-        <div className="twk-hd" onMouseDown={onDragStart}>
+        <div className="twk-hd" onPointerDown={onDragStart}>
           <b>{title}</b>
           <button className="twk-x" aria-label="Close tweaks"
-                  onMouseDown={(e) => e.stopPropagation()}
+                  onPointerDown={(e) => e.stopPropagation()}
                   onClick={dismiss}>✕</button>
         </div>
         <div className="twk-body">
