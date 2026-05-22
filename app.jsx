@@ -92,7 +92,7 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // thresholds because nasals (m, n) naturally have flatter low-frequency
   // distributions than fricatives — using a single 0.20 floor would gate
   // out perfectly good n's whose energy spreads across V/L/LM evenly.
-  const concentrationMin = { m: 0.16, n: 0.18, v: 0.16, f: 0.16 }[letter] ?? 0.20;
+  const concentrationMin = { m: 0.16, n: 0.22, v: 0.16, f: 0.16 }[letter] ?? 0.20;
   const maxFrac = Math.max(fV, fL, fLM, fM, fH, fVH);
   if (maxFrac < concentrationMin) return 0;
 
@@ -139,11 +139,13 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // the gate, while a flat M (fLM ≈ 0.08) still only partially passes.
   const nGate         = clamp((fLM - 0.04) * 9.0, 0, 1);
   const nVoicedGate   = clamp((fV - 0.02) * 8.0, 0, 1);
-  // Relaxed nasal-shape gate: real-world n's vary in how much V vs L energy
-  // they carry depending on pitch and openness. Lower threshold (0.18 vs
-  // 0.25) so a clear "nnn" with quieter low-band energy still passes the
-  // shape filter at full strength.
-  const nNasalShape   = clamp(((fV + fL) - 0.18) * 4.0, 0, 1);
+  // Nasal-shape gate: real n's concentrate energy in V+L heavily (often
+  // >0.55 combined). Background noise rarely hits 0.30 combined low-band
+  // because its energy spreads across all six bands. Threshold 0.22 sits
+  // comfortably above flat-noise distributions (~0.17 per band → V+L ≈
+  // 0.34, gated to 0.48) while letting a real "nnn" with V+L ≥ 0.47
+  // fully pass.
+  const nNasalShape   = clamp(((fV + fL) - 0.22) * 4.0, 0, 1);
   // Coarse shape: separates nasals from fricatives. Loose threshold so v
   // (the quietest voiced fricative) still passes.
   const fricShape     = clamp(((fM + fH + fVH) - 0.15) * 4.0, 0, 1);
@@ -175,9 +177,10 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
     // N is defined by its LM peak (F2) — that's the M-vs-N separator.
     // High-frequency presence is the noise-vs-N separator: room hum,
     // breath, and broadband background bleed all have energy in H/VH
-    // that a real n doesn't. Weighting those highly amplifies the
-    // "this is n" vs "this is noise" contrast.
-    n: { V: 1.5, L: 1.0, LM: 3.0, M: 1.5, H: 2.5, VH: 2.5 },
+    // that a real n doesn't. Heavy H/VH weights (3.5/4.0) push noise
+    // way past the match threshold because noise *always* has some H/VH
+    // energy and n has near-zero — the weighted disagreement compounds.
+    n: { V: 1.5, L: 1.0, LM: 3.0, M: 1.5, H: 3.5, VH: 4.0 },
   };
   const w = distWeights[letter];
   let dist;
@@ -199,7 +202,7 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   //      ratio of "right" to "wrong" dist is what matters, not absolute.
   //   m, n: F2 / nasal-shape variability across speakers → relaxed.
   const matchTolByLetter = {
-    s: 1.2, z: 1.2, sh: 1.2, f: 3.0, v: 1.8, m: 1.7, n: 3.4,
+    s: 1.2, z: 1.2, sh: 1.2, f: 3.0, v: 1.8, m: 1.7, n: 4.0,
   };
   const matchTol = matchTolByLetter[letter] ?? 1.2;
   const match = Math.max(0, 1 - dist / matchTol);
