@@ -232,22 +232,24 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // hovering instead of falling, which breaks the game's "silence →
   // fall" contract.
   //
-  // The killer addition is formant peakiness: pink/brown/white noise
-  // can mimic a nasal's band-fraction shape (low-freq dominant,
-  // moderately peaked), but only real voice has SHARP formant peaks
-  // INSIDE individual bands. Measuring max-bin-vs-mean-bin within the
-  // V band (where M/N's F1 lives at ~250 Hz) cleanly separates voice
-  // from any kind of noise — voice ≥ 2.0, noise typically 1.0-1.4.
+  // Two-tier defense: shape cutoffs catch easy noise; formant
+  // peakiness catches noise that mimics nasal shape (white/pink/brown).
   if (letter === 'm' || letter === 'n') {
-    if (fM + fH + fVH > 0.30) return 0;
-    if (flatness > 0.82) return 0;
-    if (nasalRatio < 1.3) return 0;
-    // Real M/N has a formant peak somewhere in V (80-350 Hz, F1) or
-    // L (350-800 Hz, harmonic). Noise without harmonic structure
-    // can't produce this — it's smooth inside every band.
+    if (fM + fH + fVH > 0.28) return 0;
+    if (flatness > 0.78) return 0;
+    if (nasalRatio < 1.8) return 0;
+    // Formant peakiness: a real F1 formant produces a peak inside the
+    // V band that's 4-8× the average bin level. White noise, by
+    // contrast, has statistical max-to-mean ≈ ln(N_bins) ≈ 2.5 for
+    // ~13 V-band bins — the 1.7 threshold I had before was below that
+    // floor. Raised to 2.5 (clearly above noise statistics, well
+    // below real-formant peakiness) AND require simultaneous mid-level
+    // peakiness in L band (voice has F1+harmonics in both; noise
+    // wouldn't randomly peak in both bands consistently).
     const vPeak = bandPeakRatio(freqData, sampleRate, fftSize, 80, 350);
     const lPeak = bandPeakRatio(freqData, sampleRate, fftSize, 350, 800);
-    if (Math.max(vPeak, lPeak) < 1.7) return 0;
+    if (vPeak < 2.5) return 0;
+    if (lPeak < 1.8) return 0;
   }
 
   // Distance from spectral template. Most letters use uniform L1 (every
