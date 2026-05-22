@@ -205,6 +205,22 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // Real noise is still well above 0.85.
   const nasalPeaked = clamp((0.85 - flatness) * 8, 0, 1);
 
+  // Hard cutoffs for nasals: ambient noise must be REJECTED to zero,
+  // not just attenuated — even a small fractional score keeps the bird
+  // hovering instead of falling, which breaks the game's "silence →
+  // fall" contract. Soft gates above let small noise leak through; hard
+  // if-returns here ensure ambient produces exactly 0 output.
+  // Thresholds calibrated wide enough that even noisy-phone-M/N passes:
+  //   real m  → fM+fH+fVH ≈ 0.05, flatness ≈ 0.36, ratio ≈ 17
+  //   real n  → fM+fH+fVH ≈ 0.20, flatness ≈ 0.61, ratio ≈ 2.75
+  //   phone n with leakage → fM+fH+fVH ≈ 0.25, flatness ≈ 0.75, ratio ≈ 1.8
+  //   ambient noise → fM+fH+fVH ≥ 0.30 OR flatness ≥ 0.85 OR ratio ≤ 1.3
+  if (letter === 'm' || letter === 'n') {
+    if (fM + fH + fVH > 0.30) return 0;
+    if (flatness > 0.82) return 0;
+    if (nasalRatio < 1.3) return 0;
+  }
+
   // Distance from spectral template. Most letters use uniform L1 (every
   // band contributes equally), but f gets a discriminative-weighted L1:
   // we know in advance that f is defined by its M/H peak, its lack of
