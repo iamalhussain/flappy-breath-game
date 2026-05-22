@@ -229,27 +229,27 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
 
   // Hard cutoffs for nasals: ambient noise must be REJECTED to zero,
   // not just attenuated — even a small fractional score keeps the bird
-  // hovering instead of falling, which breaks the game's "silence →
-  // fall" contract.
-  //
-  // Two-tier defense: shape cutoffs catch easy noise; formant
-  // peakiness catches noise that mimics nasal shape (white/pink/brown).
+  // hovering instead of falling. Shape cutoffs catch easy noise;
+  // formant peakiness catches shape-mimicking noise (white/pink/brown).
+  let nasalPeakiness = 1;
   if (letter === 'm' || letter === 'n') {
-    if (fM + fH + fVH > 0.28) return 0;
-    if (flatness > 0.78) return 0;
-    if (nasalRatio < 1.8) return 0;
-    // Formant peakiness: a real F1 formant produces a peak inside the
-    // V band that's 4-8× the average bin level. White noise, by
-    // contrast, has statistical max-to-mean ≈ ln(N_bins) ≈ 2.5 for
-    // ~13 V-band bins — the 1.7 threshold I had before was below that
-    // floor. Raised to 2.5 (clearly above noise statistics, well
-    // below real-formant peakiness) AND require simultaneous mid-level
-    // peakiness in L band (voice has F1+harmonics in both; noise
-    // wouldn't randomly peak in both bands consistently).
+    if (fM + fH + fVH > 0.30) return 0;
+    if (flatness > 0.82) return 0;
+    if (nasalRatio < 1.5) return 0;
+    // Formant peakiness: real voice has SOMETHING peaky in V or L
+    // (F1 plus harmonics). Hard floor at max(V,L) ≥ 1.5 rejects only
+    // the smoothest noise; the soft peakiness multiplier below adds
+    // graded attenuation for in-between cases without ever fully
+    // gating real voice.
     const vPeak = bandPeakRatio(freqData, sampleRate, fftSize, 80, 350);
     const lPeak = bandPeakRatio(freqData, sampleRate, fftSize, 350, 800);
-    if (vPeak < 2.5) return 0;
-    if (lPeak < 1.8) return 0;
+    const maxPeak = Math.max(vPeak, lPeak);
+    if (maxPeak < 1.5) return 0;
+    // Soft scale: 0 at maxPeak=1.5, 1.0 at maxPeak=3.0. Multiplied
+    // into gateByLetter below so noise sitting in the 1.5-2.0
+    // statistical zone gets heavily attenuated even if it passes
+    // every shape cutoff.
+    nasalPeakiness = clamp((maxPeak - 1.5) / 1.5, 0, 1);
   }
 
   // Distance from spectral template. Most letters use uniform L1 (every
@@ -354,8 +354,8 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
     // The adaptive noise floor at letterStrength's entry already ensures
     // signal > ambient × gateMult, so no separate energy floor needed
     // (that was killing legit weak phone-M/N).
-    m: mGate * mNasalShape * mVoicedGate * nasalAntiNoise * nasalRatioGate * nasalPeaked,
-    n: nGate * nNasalShape * nVoicedGate * nasalAntiNoise * nasalRatioGate * nasalPeaked,
+    m: mGate * mNasalShape * mVoicedGate * nasalAntiNoise * nasalRatioGate * nasalPeaked * nasalPeakiness,
+    n: nGate * nNasalShape * nVoicedGate * nasalAntiNoise * nasalRatioGate * nasalPeaked * nasalPeakiness,
   };
   return clamp(
     matchSq * energyTerm * scaleByLetter[letter] * gateByLetter[letter],
