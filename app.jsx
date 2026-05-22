@@ -210,8 +210,19 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // sustained "ssss" and "ffff" at the same mic input produce comparable
   // strengths instead of one being twice the other.
   const totalE = H + VH * 1.2 + M * 0.9 + L * 0.7 + V * 0.7 + LM * 0.6;
+  // Per-letter loudness curve. Default is linear (totalE^1.0). f gets a
+  // square-root response so quiet f's still produce a meaningful score —
+  // a perfect template match at low volume previously vanished because
+  // output was linear in amplitude. With sqrt, totalE=0.1 boosts from
+  // 0.1 → 0.316 (~3× sensitivity gain at the quiet end), while totalE=1
+  // stays at 1 (no change at the loud end).
+  const energyCurve = { f: 0.5 };
+  const exp = energyCurve[letter] ?? 1.0;
+  const energyTerm = exp === 1.0 ? totalE : Math.pow(totalE, exp);
   const scaleByLetter = {
-    s: 2.4, z: 1.5, sh: 2.6, f: 6.0, v: 6.8, m: 1.7, n: 7.5,
+    // f scale dialed down to 4.5 to compensate for the sqrt expansion;
+    // net loud-f output is similar, but quiet-f is dramatically louder.
+    s: 2.4, z: 1.5, sh: 2.6, f: 4.5, v: 6.8, m: 1.7, n: 7.5,
   };
   const gateByLetter = {
     s:  voicelessGate * fricShape,
@@ -225,7 +236,7 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
     n:  nGate         * nNasalShape * nVoicedGate,
   };
   return clamp(
-    matchSq * totalE * scaleByLetter[letter] * gateByLetter[letter],
+    matchSq * energyTerm * scaleByLetter[letter] * gateByLetter[letter],
     0, 1,
   );
 }
