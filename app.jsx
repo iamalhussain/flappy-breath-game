@@ -158,15 +158,35 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // looser 0.08. Still rejects vowels and quiet breath.
   const fFricShape    = clamp(((fM + fH + fVH) - 0.10) * 4.0, 0, 1);
 
-  const dist = Math.abs(fV - t.V) + Math.abs(fL - t.L) + Math.abs(fLM - t.LM)
-             + Math.abs(fM - t.M) + Math.abs(fH - t.H) + Math.abs(fVH - t.VH);
+  // Distance from spectral template. Most letters use uniform L1 (every
+  // band contributes equally), but f gets a discriminative-weighted L1:
+  // we know in advance that f is defined by its M/H peak, its lack of
+  // voicing, and its broadband (not VH-only) high-freq energy — while
+  // f's L band carries almost no information. Weighting amplifies the
+  // signal-to-noise of the match: a real f against the f template gets
+  // a small dist; a near-miss like sh or s gets a much larger dist than
+  // uniform L1 would give.
+  const fWeights = { V: 2.5, L: 0.5, LM: 1.0, M: 1.5, H: 2.5, VH: 1.5 };
+  let dist;
+  if (letter === 'f') {
+    dist = Math.abs(fV - t.V) * fWeights.V
+         + Math.abs(fL - t.L) * fWeights.L
+         + Math.abs(fLM - t.LM) * fWeights.LM
+         + Math.abs(fM - t.M) * fWeights.M
+         + Math.abs(fH - t.H) * fWeights.H
+         + Math.abs(fVH - t.VH) * fWeights.VH;
+  } else {
+    dist = Math.abs(fV - t.V) + Math.abs(fL - t.L) + Math.abs(fLM - t.LM)
+         + Math.abs(fM - t.M) + Math.abs(fH - t.H) + Math.abs(fVH - t.VH);
+  }
   // Per-letter match tolerance. Higher = more forgiving template (steadier
   // score on phonemes whose spectrum jitters frame-to-frame). Default 1.2.
-  //   f: broad turbulent fricative, bands jitter heavily → 1.6
-  //   n: F2 wanders 1.5–2 kHz across speakers/positions, alveolar contact
-  //      varies → 1.6 to keep the score stable
+  //   f: weighted L1 (sum-of-weights = 9.5 vs uniform's 6), so its
+  //      tolerance is scaled up proportionally (1.9 × 1.6 ≈ 3.0) — the
+  //      ratio of "right" to "wrong" dist is what matters, not absolute.
+  //   m, n: F2 / nasal-shape variability across speakers → relaxed.
   const matchTolByLetter = {
-    s: 1.2, z: 1.2, sh: 1.2, f: 1.9, v: 1.8, m: 1.7, n: 1.9,
+    s: 1.2, z: 1.2, sh: 1.2, f: 3.0, v: 1.8, m: 1.7, n: 1.9,
   };
   const matchTol = matchTolByLetter[letter] ?? 1.2;
   const match = Math.max(0, 1 - dist / matchTol);
