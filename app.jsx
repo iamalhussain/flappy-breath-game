@@ -92,7 +92,7 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // thresholds because nasals (m, n) naturally have flatter low-frequency
   // distributions than fricatives — using a single 0.20 floor would gate
   // out perfectly good n's whose energy spreads across V/L/LM evenly.
-  const concentrationMin = { m: 0.16, n: 0.15, v: 0.16, f: 0.16 }[letter] ?? 0.20;
+  const concentrationMin = { m: 0.16, n: 0.18, v: 0.16, f: 0.16 }[letter] ?? 0.20;
   const maxFrac = Math.max(fV, fL, fLM, fM, fH, fVH);
   if (maxFrac < concentrationMin) return 0;
 
@@ -166,15 +166,28 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   // signal-to-noise of the match: a real f against the f template gets
   // a small dist; a near-miss like sh or s gets a much larger dist than
   // uniform L1 would give.
-  const fWeights = { V: 2.5, L: 0.5, LM: 1.0, M: 1.5, H: 2.5, VH: 1.5 };
+  // Per-band weights for the L1 distance. Bands that strongly
+  // discriminate this letter from look-alikes (and from noise) get
+  // higher weight; bands that carry little signal get lower weight.
+  // Letters without an entry use uniform weights (all 1.0).
+  const distWeights = {
+    f: { V: 2.5, L: 0.5, LM: 1.0, M: 1.5, H: 2.5, VH: 1.5 },
+    // N is defined by its LM peak (F2) — that's the M-vs-N separator.
+    // High-frequency presence is the noise-vs-N separator: room hum,
+    // breath, and broadband background bleed all have energy in H/VH
+    // that a real n doesn't. Weighting those highly amplifies the
+    // "this is n" vs "this is noise" contrast.
+    n: { V: 1.5, L: 1.0, LM: 3.0, M: 1.5, H: 2.5, VH: 2.5 },
+  };
+  const w = distWeights[letter];
   let dist;
-  if (letter === 'f') {
-    dist = Math.abs(fV - t.V) * fWeights.V
-         + Math.abs(fL - t.L) * fWeights.L
-         + Math.abs(fLM - t.LM) * fWeights.LM
-         + Math.abs(fM - t.M) * fWeights.M
-         + Math.abs(fH - t.H) * fWeights.H
-         + Math.abs(fVH - t.VH) * fWeights.VH;
+  if (w) {
+    dist = Math.abs(fV - t.V) * w.V
+         + Math.abs(fL - t.L) * w.L
+         + Math.abs(fLM - t.LM) * w.LM
+         + Math.abs(fM - t.M) * w.M
+         + Math.abs(fH - t.H) * w.H
+         + Math.abs(fVH - t.VH) * w.VH;
   } else {
     dist = Math.abs(fV - t.V) + Math.abs(fL - t.L) + Math.abs(fLM - t.LM)
          + Math.abs(fM - t.M) + Math.abs(fH - t.H) + Math.abs(fVH - t.VH);
@@ -186,7 +199,7 @@ function letterStrength(freqData, sampleRate, fftSize, letter, gateMult = 2.5) {
   //      ratio of "right" to "wrong" dist is what matters, not absolute.
   //   m, n: F2 / nasal-shape variability across speakers → relaxed.
   const matchTolByLetter = {
-    s: 1.2, z: 1.2, sh: 1.2, f: 3.0, v: 1.8, m: 1.7, n: 1.9,
+    s: 1.2, z: 1.2, sh: 1.2, f: 3.0, v: 1.8, m: 1.7, n: 3.4,
   };
   const matchTol = matchTolByLetter[letter] ?? 1.2;
   const match = Math.max(0, 1 - dist / matchTol);
