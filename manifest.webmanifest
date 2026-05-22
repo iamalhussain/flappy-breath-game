@@ -1,0 +1,26 @@
+{
+  "name": "Hummingbird — Voice-Controlled Flying",
+  "short_name": "Hummingbird",
+  "description": "Make sounds to lift the bird. A voice-controlled Flappy Bird that trains your breath, resonance, and projection.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#07090b",
+  "theme_color": "#fe2c55",
+  "icons": [
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ],
+  "categories": ["games", "education", "health"]
+}

@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630">
+  <!-- OpenGraph / Twitter card preview image. 1200x630 is the standard
+       social-share size. Shown when the URL is pasted into Twitter,
+       Discord, iMessage, Slack, etc. -->
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0a0d12"/>
+      <stop offset="50%" stop-color="#1a2030"/>
+      <stop offset="100%" stop-color="#0a0d12"/>
+    </linearGradient>
+    <radialGradient id="glow1" cx="0.25" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#25f4ee" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#25f4ee" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow2" cx="0.75" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#fe2c55" stop-opacity="0.20"/>
+      <stop offset="100%" stop-color="#fe2c55" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="coin" cx="0.35" cy="0.30" r="0.8">
+      <stop offset="0%" stop-color="#fff8c2"/>
+      <stop offset="40%" stop-color="#ffe43e"/>
+      <stop offset="100%" stop-color="#c89200"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#sky)"/>
+  <rect width="1200" height="630" fill="url(#glow1)"/>
+  <rect width="1200" height="630" fill="url(#glow2)"/>
+
+  <!-- Title -->
+  <text x="600" y="265" text-anchor="middle"
+        font-family="Inter, system-ui, sans-serif"
+        font-weight="900" font-size="160"
+        fill="#ffffff" letter-spacing="-6">Hummingbird</text>
+
+  <!-- Subtitle -->
+  <text x="600" y="335" text-anchor="middle"
+        font-family="Inter, system-ui, sans-serif"
+        font-weight="600" font-size="34"
+        fill="#25f4ee" letter-spacing="2">VOICE-CONTROLLED FLYING</text>
+
+  <!-- Tagline -->
+  <text x="600" y="395" text-anchor="middle"
+        font-family="Inter, system-ui, sans-serif"
+        font-weight="500" font-size="26"
+        fill="rgba(255,255,255,0.7)" letter-spacing="0.5">Make a sound. Lift the bird. Train your breath.</text>
+
+  <!-- Coin emblem -->
+  <g transform="translate(600 490)">
+    <circle r="46" fill="url(#coin)" stroke="#000" stroke-width="5"/>
+    <text text-anchor="middle" dominant-baseline="central"
+          font-family="Inter, sans-serif" font-weight="900" font-size="50"
+          fill="#5b3c00">★</text>
+  </g>
+
+  <!-- Letter chips -->
+  <g font-family="Inter, sans-serif" font-weight="800" font-size="32" fill="#ffe43e">
+    <text x="280" y="510" text-anchor="middle" opacity="0.85">S</text>
+    <text x="370" y="510" text-anchor="middle" opacity="0.85">SH</text>
+    <text x="460" y="510" text-anchor="middle" opacity="0.85">F</text>
+    <text x="740" y="510" text-anchor="middle" opacity="0.85">V</text>
+    <text x="830" y="510" text-anchor="middle" opacity="0.85">M</text>
+    <text x="920" y="510" text-anchor="middle" opacity="0.85">N</text>
+  </g>
+</svg>

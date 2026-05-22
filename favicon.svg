@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Hummingbird favicon: pixel-style yellow bird with star accent.
+       Matches the in-game "Sunny" character + the score-coin star. -->
+  <defs>
+    <radialGradient id="bg" cx="0.3" cy="0.3" r="0.8">
+      <stop offset="0%" stop-color="#fff8c2"/>
+      <stop offset="50%" stop-color="#ffe43e"/>
+      <stop offset="100%" stop-color="#c89200"/>
+    </radialGradient>
+  </defs>
+  <!-- Background circle (the score-coin look) -->
+  <circle cx="32" cy="32" r="30" fill="url(#bg)" stroke="#000" stroke-width="3"/>
+  <!-- Bird silhouette -->
+  <g transform="translate(0 1)">
+    <!-- Body -->
+    <ellipse cx="28" cy="34" rx="14" ry="10" fill="#fe2c55"/>
+    <!-- Wing -->
+    <ellipse cx="24" cy="32" rx="8" ry="5" fill="#25f4ee" transform="rotate(-15 24 32)"/>
+    <!-- Eye -->
+    <circle cx="36" cy="30" r="3" fill="#fff"/>
+    <circle cx="37" cy="30" r="1.5" fill="#000"/>
+    <!-- Beak -->
+    <polygon points="40,32 48,33 40,35" fill="#ff8e3d" stroke="#000" stroke-width="0.5"/>
+  </g>
+</svg>
