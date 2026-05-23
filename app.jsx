@@ -441,7 +441,7 @@ function PermissionCard({ onStart, onStartAndRecord, onLanguageChange, error, re
       'وجّه الطائر بين الأنابيب!',
     ],
   } : {
-    title: 'Humming Bird',
+    title: 'Hummingbird',
     body1: 'Your letter: ',
     cta: 'Play',
     ctaRecord: 'Play & Record',
@@ -984,7 +984,7 @@ function App() {
     setPendingRecording(null);
     if (navigator.canShare && navigator.canShare({ files: [pr.file] })) {
       try {
-        await navigator.share({ files: [pr.file], title: 'Humming Bird recording' });
+        await navigator.share({ files: [pr.file], title: 'Hummingbird recording' });
         return;
       } catch (_) { /* user cancelled — fall through to download */ }
     }
@@ -1310,7 +1310,7 @@ function App() {
           let shared = false;
           if (navigator.canShare && navigator.canShare({ files: [file] })) {
             try {
-              await navigator.share({ files: [file], title: 'Humming Bird recording' });
+              await navigator.share({ files: [file], title: 'Hummingbird recording' });
               shared = true;
             } catch (_) { /* user cancelled OR gesture expired */ }
           }
