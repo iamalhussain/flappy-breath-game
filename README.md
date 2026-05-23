@@ -2,7 +2,7 @@
 
 A voice-controlled Flappy Bird that trains your breath, resonance, and projection.
 
-**[▶ Play it now](https://iamalhussain.github.io/flappy-breath-game/)**
+**[▶ Play it now at sawtlab.com](https://sawtlab.com)**
 
 ## What it is
 
