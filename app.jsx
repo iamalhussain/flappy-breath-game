@@ -387,6 +387,13 @@ const HAS_MEDIA_DEVICES = typeof navigator !== 'undefined'
 const HAS_SCREEN_RECORDING = typeof navigator !== 'undefined'
   && !!navigator.mediaDevices?.getDisplayMedia
   && typeof MediaRecorder !== 'undefined';
+// Phone / tablet detection for the save-recording flow: mobile users want
+// the OS share sheet (→ save to Photos), desktop users want a normal file
+// download (→ save to Downloads). UA covers the common cases; maxTouchPoints
+// catches iPads in desktop-website mode (which spoof a Mac UA).
+const IS_MOBILE_PLATFORM = typeof navigator !== 'undefined'
+  && (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent || '')
+      || (navigator.maxTouchPoints && navigator.maxTouchPoints > 1));
 
 // Letter pool by language. v has no native Arabic letter (loanwords write
 // it as ف), so we exclude it from Arabic selection entirely. English mode
@@ -1299,37 +1306,39 @@ function App() {
         if (blob.size === 0) {
           alert('Recording finished but no data was captured.');
         } else {
-          const filename = `humming-bird-${Date.now()}.${ext}`;
+          const filename = `hummingbird-${Date.now()}.${ext}`;
           const file = new File([blob], filename, { type: blobType });
-          // Try to share immediately. Works when the user pressed Stop in
-          // the HUD (the click gesture is still active for navigator.share).
-          // For auto-stop on game-over, the gesture has expired and share
-          // will throw — we then stash the blob in pendingRecording so the
-          // game-over "Save recording" button can trigger share from a
-          // fresh tap. Without that we'd fall back to a file download.
-          let shared = false;
-          if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          // Platform-specific save: mobile users want Photos integration
+          // via the OS share sheet; desktop users want the file in their
+          // Downloads folder. The download anchor works without active
+          // gesture, so it's safe for the auto-stop case too.
+          if (IS_MOBILE_PLATFORM
+              && navigator.canShare && navigator.canShare({ files: [file] })) {
+            // Try immediate share — works when stop came from the HUD
+            // button (click gesture still active for navigator.share).
+            let shared = false;
             try {
               await navigator.share({ files: [file], title: 'Hummingbird recording' });
               shared = true;
             } catch (_) { /* user cancelled OR gesture expired */ }
-          }
-          if (!shared) {
-            if (navigator.canShare && navigator.canShare({ files: [file] })) {
-              // Share is supported but not allowed right now — defer until
-              // the user taps the "Save recording" button.
+            if (!shared) {
+              // Gesture expired (auto-stop on game-over). Stash the blob
+              // so the "Save recording" button on the game-over card can
+              // re-trigger share from a fresh tap.
               setPendingRecording({ blob, file, filename, blobType });
-            } else {
-              // Desktop fallback: trigger download anchor.
-              const url = URL.createObjectURL(blob);
-              const a = document.createElement('a');
-              a.href = url;
-              a.download = filename;
-              document.body.appendChild(a);
-              a.click();
-              a.remove();
-              setTimeout(() => URL.revokeObjectURL(url), 1000);
             }
+          } else {
+            // Desktop (or any non-mobile platform): download directly to
+            // the user's Downloads folder. No user-gesture issues here —
+            // <a download> works from background contexts.
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
           }
         }
         // Stop the video source. For screen-share we stop the OS-level
